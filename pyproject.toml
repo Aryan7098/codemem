@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    { name = "Brave and the Bold" }
+    { name = "Aryan7098", email = "aryangopinathan07@gmail.com" }
 ]
 keywords = ["falkordb", "graph", "memory", "mcp", "agents", "coding-assistant"]
 classifiers = [

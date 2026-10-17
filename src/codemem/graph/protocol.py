@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import List, Optional, Protocol, runtime_checkable
 
 from codemem.core.models import (
+    AgentHandoffRecord,
     EvidenceRecord,
+    HandoffStatus,
     MemoryRecord,
     MemoryStatus,
     RepositoryInfo,
@@ -90,6 +92,22 @@ class GraphStoreProtocol(Protocol):
 
     def update_memory_status(self, memory_id: str, status: MemoryStatus) -> None:
         """Update the lifecycle status of a specific memory version."""
+        ...
+
+    def save_handoff(self, handoff: AgentHandoffRecord) -> AgentHandoffRecord:
+        """Store an agent handoff node and link to repository and referenced memories."""
+        ...
+
+    def get_handoff(self, handoff_id: str, repo_id: Optional[str] = None) -> Optional[AgentHandoffRecord]:
+        """Fetch a specific handoff record, optionally verifying repository scope."""
+        ...
+
+    def list_handoffs(self, repo_id: str, status: Optional[HandoffStatus] = None) -> List[AgentHandoffRecord]:
+        """List handoffs for a repository, optionally filtered by status."""
+        ...
+
+    def update_handoff_status(self, handoff_id: str, status: HandoffStatus) -> None:
+        """Update the status of an agent handoff."""
         ...
 
     def clear(self, repo_id: Optional[str] = None) -> None:

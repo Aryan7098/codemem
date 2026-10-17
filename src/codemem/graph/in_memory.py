@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 from codemem.core.models import (
+    AgentHandoffRecord,
     EvidenceRecord,
+    HandoffStatus,
     MemoryRecord,
     MemoryStatus,
     RepositoryInfo,
+    _utc_now_iso,
 )
 
 
@@ -20,6 +23,7 @@ class InMemoryGraphStore:
         self._repositories: Dict[str, RepositoryInfo] = {}
         self._memories: Dict[str, MemoryRecord] = {}
         self._evidence: Dict[str, EvidenceRecord] = {}
+        self._handoffs: Dict[str, AgentHandoffRecord] = {}
 
         # Graph Edges
         # (:Memory)-[:SUPPORTED_BY]->(:Evidence)
@@ -228,12 +232,41 @@ class InMemoryGraphStore:
         if mem is not None:
             mem.status = status
 
+    def save_handoff(self, handoff: AgentHandoffRecord) -> AgentHandoffRecord:
+        """Store an agent handoff node and link to repository and referenced memories."""
+        self._handoffs[handoff.id] = handoff
+        return handoff
+
+    def get_handoff(self, handoff_id: str, repo_id: Optional[str] = None) -> Optional[AgentHandoffRecord]:
+        """Fetch a specific handoff record, optionally verifying repository scope."""
+        h = self._handoffs.get(handoff_id)
+        if h is None:
+            return None
+        if repo_id is not None and h.repository_id != repo_id:
+            return None
+        return h
+
+    def list_handoffs(self, repo_id: str, status: Optional[HandoffStatus] = None) -> List[AgentHandoffRecord]:
+        """List handoffs for a repository, optionally filtered by status."""
+        results = [h for h in self._handoffs.values() if h.repository_id == repo_id]
+        if status is not None:
+            results = [h for h in results if h.status == status]
+        return sorted(results, key=lambda h: h.created_at, reverse=True)
+
+    def update_handoff_status(self, handoff_id: str, status: HandoffStatus) -> None:
+        """Update the status of an agent handoff."""
+        h = self._handoffs.get(handoff_id)
+        if h is not None:
+            h.status = status
+            h.updated_at = _utc_now_iso()
+
     def clear(self, repo_id: Optional[str] = None) -> None:
         """Clear graph data (for isolated test teardowns)."""
         if repo_id is None:
             self._repositories.clear()
             self._memories.clear()
             self._evidence.clear()
+            self._handoffs.clear()
             self._memory_to_evidence.clear()
             self._supersedes_edges.clear()
             self._contradicts_edges.clear()
@@ -244,4 +277,7 @@ class InMemoryGraphStore:
                 del self._memories[mid]
                 self._memory_to_evidence.pop(mid, None)
                 self._contradicts_edges.pop(mid, None)
+            to_del_h = [hid for hid, h in self._handoffs.items() if h.repository_id == repo_id]
+            for hid in to_del_h:
+                del self._handoffs[hid]
             self._repositories.pop(repo_id, None)

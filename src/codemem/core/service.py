@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from typing import List, Optional, Set
 
 from codemem.core.models import (
+    AgentHandoffRecord,
     ChangeDetectionResponse,
     EvidenceInput,
     EvidenceRecord,
+    HandoffInput,
+    HandoffStatus,
     MemoryExplanation,
     MemoryHistoryResponse,
     MemoryInput,
@@ -509,3 +513,61 @@ class MemoryService:
         self.store.update_memory_status(mem.id, new_status)
         self.store.save_memory(mem, updated_evidence)
         return mem
+
+    def record_handoff(self, handoff_input: HandoffInput) -> AgentHandoffRecord:
+        """
+        Record a first-class agent handoff for task transitions.
+        Anchors completed work, open risks, and relevant memory pointers in the graph.
+        """
+        repo = self.store.get_repository(handoff_input.repository_id)
+        if repo is None:
+            raise ValueError(f"Repository not registered in graph: {handoff_input.repository_id}")
+
+        record = AgentHandoffRecord(
+            repository_id=handoff_input.repository_id,
+            originating_agent_id=handoff_input.originating_agent_id,
+            receiving_agent_id=handoff_input.receiving_agent_id,
+            task_objective=handoff_input.task_objective,
+            completed_work=handoff_input.completed_work,
+            open_risks=list(handoff_input.open_risks),
+            relevant_memory_ids=list(handoff_input.relevant_memory_ids),
+            status=HandoffStatus.PENDING,
+        )
+        self.store.save_handoff(record)
+        return record
+
+    def get_handoff(self, handoff_id: str, repo_id: Optional[str] = None) -> Optional[AgentHandoffRecord]:
+        """Fetch a specific handoff record by handoff_id with optional repository scoping."""
+        record = self.store.get_handoff(handoff_id)
+        if record is None:
+            return None
+        if repo_id is not None and record.repository_id != repo_id:
+            raise PermissionError(f"Scope violation: handoff '{handoff_id}' belongs to repository '{record.repository_id}', not '{repo_id}'")
+        return record
+
+    def list_handoffs(
+        self,
+        repo_id: str,
+        status: Optional[HandoffStatus] = None,
+    ) -> List[AgentHandoffRecord]:
+        """List handoff records for a repository, optionally filtered by status."""
+        return self.store.list_handoffs(repo_id, status=status)
+
+    def complete_handoff(
+        self,
+        handoff_id: str,
+        repo_id: Optional[str] = None,
+        receiving_agent_id: Optional[str] = None,
+    ) -> AgentHandoffRecord:
+        """Mark a handoff as completed by the receiving agent."""
+        record = self.get_handoff(handoff_id, repo_id=repo_id)
+        if record is None:
+            raise ValueError(f"Handoff '{handoff_id}' not found")
+
+        record.status = HandoffStatus.COMPLETED
+        if receiving_agent_id:
+            record.receiving_agent_id = receiving_agent_id
+        record.updated_at = datetime.now(timezone.utc).isoformat()
+        self.store.save_handoff(record)
+        return record
+

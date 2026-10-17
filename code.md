@@ -341,6 +341,35 @@ This document details how execution travels across files, functions, and modules
    - Flushes state to .codemem/store.json or commits Cypher update to FalkorDB
 ```
 
+---
+
+### Flow L: Agent Handoffs (`codemem handoff`)
+```
+1. Invocation:
+   CLI: cli/main.py :: handoff_grp [record | list | complete]
+   MCP: mcp/server.py :: [record_handoff | list_handoffs | complete_handoff]
+
+2. Core Domain Execution (core/service.py :: MemoryService):
+   - record_handoff(handoff_input):
+     - Validates repository registration
+     - Instantiates AgentHandoffRecord (status=PENDING) with open risks and relevant memory IDs
+     - Stores in graph adapter / in-memory store
+   - get_handoff(handoff_id, repo_id):
+     - Retrieves record with repository scope check (raises PermissionError on mismatch)
+   - list_handoffs(repo_id, status):
+     - Returns handoffs for repo ordered newest first, optionally filtered by status
+   - complete_handoff(handoff_id, repo_id, receiving_agent_id):
+     - Sets status to COMPLETED, updates receiving agent ID and updated_at timestamp
+
+3. Storage & Graph Edges:
+   - In-Memory: Persisted to .codemem/store.json under "handoffs"
+   - FalkorDB: (:Handoff)-[:FOR_REPO]->(:Repository),
+              (:Handoff)-[:CREATED_BY]->(:Agent),
+              (:Handoff)-[:ASSIGNED_TO]->(:Agent),
+              (:Handoff)-[:REFERENCES_MEMORY]->(:Memory)
+```
+
+
 
 
 

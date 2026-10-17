@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from codemem.core.models import (
+    AgentHandoffRecord,
     EvidenceRecord,
+    HandoffStatus,
     MemoryRecord,
     MemoryStatus,
     RepositoryInfo,
@@ -89,6 +91,45 @@ def _row_to_memory_record(
         contradicts_id=mem_props.get("contradicts_id"),
         recorded_at=mem_props.get("recorded_at", datetime.now(timezone.utc).isoformat()),
         evidence_records=ev_records,
+    )
+
+
+def _row_to_handoff_record(props: Dict[str, Any]) -> AgentHandoffRecord:
+    """Reconstruct typed AgentHandoffRecord from Cypher node properties."""
+    raw_risks = props.get("open_risks", [])
+    if isinstance(raw_risks, str):
+        try:
+            open_risks = json.loads(raw_risks)
+        except Exception:
+            open_risks = [raw_risks] if raw_risks else []
+    elif isinstance(raw_risks, list):
+        open_risks = raw_risks
+    else:
+        open_risks = []
+
+    raw_mems = props.get("relevant_memory_ids", [])
+    if isinstance(raw_mems, str):
+        try:
+            relevant_memory_ids = json.loads(raw_mems)
+        except Exception:
+            relevant_memory_ids = [raw_mems] if raw_mems else []
+    elif isinstance(raw_mems, list):
+        relevant_memory_ids = raw_mems
+    else:
+        relevant_memory_ids = []
+
+    return AgentHandoffRecord(
+        handoff_id=props["handoff_id"],
+        repository_id=props["repository_id"],
+        originating_agent_id=props.get("originating_agent_id", "unknown-agent"),
+        receiving_agent_id=props.get("receiving_agent_id"),
+        task_objective=props.get("task_objective", ""),
+        completed_work=props.get("completed_work", ""),
+        open_risks=open_risks,
+        relevant_memory_ids=relevant_memory_ids,
+        status=props.get("status", HandoffStatus.PENDING),
+        created_at=props.get("created_at", datetime.now(timezone.utc).isoformat()),
+        updated_at=props.get("updated_at", datetime.now(timezone.utc).isoformat()),
     )
 
 
@@ -526,6 +567,114 @@ class FalkorDBAdapter:
         status_val = status.value if hasattr(status, "value") else str(status)
         self.query(cypher, {"memory_id": memory_id, "status": status_val})
 
+    def save_handoff(self, record: AgentHandoffRecord) -> None:
+        """Store or update an agent handoff record."""
+        cypher = """
+        MERGE (h:Handoff {handoff_id: $handoff_id})
+        SET h.repository_id = $repository_id,
+            h.originating_agent_id = $originating_agent_id,
+            h.receiving_agent_id = $receiving_agent_id,
+            h.task_objective = $task_objective,
+            h.completed_work = $completed_work,
+            h.open_risks = $open_risks,
+            h.relevant_memory_ids = $relevant_memory_ids,
+            h.status = $status,
+            h.created_at = $created_at,
+            h.updated_at = $updated_at
+        WITH h
+        MATCH (r:Repository {id: $repository_id})
+        MERGE (h)-[:FOR_REPO]->(r)
+        WITH h
+        MERGE (oa:Agent {id: $originating_agent_id})
+        MERGE (h)-[:CREATED_BY]->(oa)
+        """
+        status_val = record.status.value if hasattr(record.status, "value") else str(record.status)
+        params = {
+            "handoff_id": record.handoff_id,
+            "repository_id": record.repository_id,
+            "originating_agent_id": record.originating_agent_id,
+            "receiving_agent_id": record.receiving_agent_id,
+            "task_objective": record.task_objective,
+            "completed_work": record.completed_work,
+            "open_risks": list(record.open_risks),
+            "relevant_memory_ids": list(record.relevant_memory_ids),
+            "status": status_val,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+        self.query(cypher, params)
+
+        if record.receiving_agent_id:
+            recv_cypher = """
+            MATCH (h:Handoff {handoff_id: $handoff_id})
+            MERGE (ra:Agent {id: $receiving_agent_id})
+            MERGE (h)-[:ASSIGNED_TO]->(ra)
+            """
+            self.query(recv_cypher, {
+                "handoff_id": record.handoff_id,
+                "receiving_agent_id": record.receiving_agent_id,
+            })
+
+        if record.relevant_memory_ids:
+            mem_cypher = """
+            MATCH (h:Handoff {handoff_id: $handoff_id})
+            UNWIND $mem_ids AS mem_id
+            MATCH (m:Memory {id: mem_id})
+            MERGE (h)-[:REFERENCES_MEMORY]->(m)
+            """
+            self.query(mem_cypher, {
+                "handoff_id": record.handoff_id,
+                "mem_ids": list(record.relevant_memory_ids),
+            })
+
+    def get_handoff(self, handoff_id: str) -> Optional[AgentHandoffRecord]:
+        """Fetch a specific handoff record by handoff_id."""
+        cypher = "MATCH (h:Handoff {handoff_id: $handoff_id}) RETURN h"
+        res = self.query(cypher, {"handoff_id": handoff_id})
+        if not res or not res.result_set:
+            return None
+        props = _extract_node_props(res.result_set[0][0])
+        return _row_to_handoff_record(props)
+
+    def list_handoffs(
+        self,
+        repo_id: str,
+        status: Optional[HandoffStatus] = None,
+    ) -> List[AgentHandoffRecord]:
+        """List handoffs for a repository, optionally filtered by status."""
+        if status is not None:
+            status_val = status.value if hasattr(status, "value") else str(status)
+            cypher = """
+            MATCH (h:Handoff {repository_id: $repo_id, status: $status})
+            RETURN h
+            ORDER BY h.created_at DESC
+            """
+            res = self.query(cypher, {"repo_id": repo_id, "status": status_val})
+        else:
+            cypher = """
+            MATCH (h:Handoff {repository_id: $repo_id})
+            RETURN h
+            ORDER BY h.created_at DESC
+            """
+            res = self.query(cypher, {"repo_id": repo_id})
+        if not res or not res.result_set:
+            return []
+        return [_row_to_handoff_record(_extract_node_props(row[0])) for row in res.result_set]
+
+    def update_handoff_status(self, handoff_id: str, status: HandoffStatus) -> None:
+        """Update status of a handoff record."""
+        cypher = """
+        MATCH (h:Handoff {handoff_id: $handoff_id})
+        SET h.status = $status,
+            h.updated_at = $updated_at
+        """
+        status_val = status.value if hasattr(status, "value") else str(status)
+        self.query(cypher, {
+            "handoff_id": handoff_id,
+            "status": status_val,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
     def clear(self, repo_id: Optional[str] = None) -> None:
         """Clear graph data (for isolated test teardowns)."""
         if repo_id is None:
@@ -537,6 +686,9 @@ class FalkorDBAdapter:
                 OPTIONAL MATCH (m)-[:SUPPORTED_BY]->(e:Evidence)
                 DETACH DELETE m, e
                 WITH 1 as dummy
+                MATCH (h:Handoff {repository_id: $repo_id})
+                DETACH DELETE h
+                WITH 1 as dummy2
                 MATCH (r:Repository {id: $repo_id})
                 DETACH DELETE r
                 """,

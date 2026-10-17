@@ -11,9 +11,12 @@ from typing import List, Optional, Tuple
 import click
 
 from codemem.core.models import (
+    AgentHandoffRecord,
     CodeMemErrorDetail,
     EvidenceInput,
     EvidenceRecord,
+    HandoffInput,
+    HandoffStatus,
     MemoryInput,
     MemoryRecord,
     MemoryType,
@@ -58,6 +61,10 @@ def load_persistent_store(state_file: Path) -> InMemoryGraphStore:
             ev_list = [EvidenceRecord.model_validate(e) for e in mem_dict.get("evidence_records", [])]
             store.save_memory(mem, ev_list)
 
+        for handoff_dict in data.get("handoffs", []):
+            handoff = AgentHandoffRecord.model_validate(handoff_dict)
+            store.save_handoff(handoff)
+
         for new_id, edge_val in data.get("supersedes_edges", {}).items():
             store._supersedes_edges[new_id] = tuple(edge_val)  # type: ignore[assignment]
 
@@ -75,6 +82,7 @@ def save_persistent_store(store: InMemoryGraphStore, state_file: Path) -> None:
     payload = {
         "repositories": [r.model_dump(mode="json") for r in store._repositories.values()],
         "memories": [m.model_dump(mode="json") for m in store._memories.values()],
+        "handoffs": [h.model_dump(mode="json") for h in getattr(store, "_handoffs", {}).values()],
         "supersedes_edges": {k: list(v) for k, v in store._supersedes_edges.items()},
         "contradicts_edges": dict(getattr(store, "_contradicts_edges", {})),
     }
@@ -531,6 +539,150 @@ def mcp_cmd(path: str) -> None:
     """Launch the CodeMem MCP server over stdio for LLM coding agents."""
     from codemem.mcp.server import create_mcp_server
     create_mcp_server(repo_path=path).run()
+
+
+@cli.group("handoff")
+def handoff_grp() -> None:
+    """Manage structured agent handoff records for multi-agent workflows."""
+
+
+@handoff_grp.command("record")
+@click.option("--path", "--repo", "path", default=".", help="Repository path.")
+@click.option("--repo-id", default=None, help="Explicit repository_id override.")
+@click.option("--from", "originating_agent_id", default="cli-agent", help="Originating agent ID.")
+@click.option("--to", "receiving_agent_id", default=None, help="Receiving agent ID.")
+@click.option("--objective", required=True, help="Task objective for the handoff.")
+@click.option("--completed", required=True, help="Summary of completed work.")
+@click.option("--risk", "-r", "open_risks", multiple=True, help="Open risks or follow-up traps.")
+@click.option("--memory", "-m", "relevant_memory_ids", multiple=True, help="Relevant memory IDs.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def handoff_record_cmd(
+    path: str,
+    repo_id: Optional[str],
+    originating_agent_id: str,
+    receiving_agent_id: Optional[str],
+    objective: str,
+    completed: str,
+    open_risks: Tuple[str, ...],
+    relevant_memory_ids: Tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Record an agent handoff for task transitions and continuity."""
+    try:
+        service, repo, state_file = get_service_and_repo(path)
+        actual_repo_id = repo_id if repo_id is not None else repo.repository_id
+
+        risks_list: List[str] = []
+        for r in open_risks:
+            risks_list.extend([item.strip() for item in r.split(",") if item.strip()])
+
+        mem_list: List[str] = []
+        for m in relevant_memory_ids:
+            mem_list.extend([item.strip() for item in m.split(",") if item.strip()])
+
+        inp = HandoffInput(
+            repository_id=actual_repo_id,
+            originating_agent_id=originating_agent_id,
+            receiving_agent_id=receiving_agent_id,
+            task_objective=objective,
+            completed_work=completed,
+            open_risks=risks_list,
+            relevant_memory_ids=mem_list,
+        )
+        record = service.record_handoff(inp)
+        if isinstance(service.store, InMemoryGraphStore):
+            save_persistent_store(service.store, state_file)
+
+        if as_json:
+            click.echo(record.model_dump_json(indent=2))
+        else:
+            click.secho(f"Handoff recorded: {record.handoff_id}", fg="green", bold=True)
+            click.echo(f"  Repository : {record.repository_id}")
+            click.echo(f"  From Agent : {record.originating_agent_id}")
+            click.echo(f"  To Agent   : {record.receiving_agent_id or 'Unassigned'}")
+            click.echo(f"  Objective  : {record.task_objective}")
+            click.echo(f"  Status     : {record.status.value}")
+            if record.open_risks:
+                click.echo(f"  Open Risks : {', '.join(record.open_risks)}")
+            if record.relevant_memory_ids:
+                click.echo(f"  Memories   : {', '.join(record.relevant_memory_ids)}")
+    except Exception as exc:
+        _emit_error("HANDOFF_FAILED", str(exc), as_json=as_json)
+
+
+@handoff_grp.command("list")
+@click.option("--path", "--repo", "path", default=".", help="Repository path.")
+@click.option("--repo-id", default=None, help="Explicit repository_id override.")
+@click.option(
+    "--status",
+    type=click.Choice([s.value for s in HandoffStatus], case_sensitive=False),
+    default=None,
+    help="Filter by handoff status.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def handoff_list_cmd(
+    path: str,
+    repo_id: Optional[str],
+    status: Optional[str],
+    as_json: bool,
+) -> None:
+    """List agent handoffs for the repository."""
+    try:
+        service, repo, _ = get_service_and_repo(path)
+        actual_repo_id = repo_id if repo_id is not None else repo.repository_id
+        status_filter = HandoffStatus(status) if status else None
+        handoffs = service.list_handoffs(actual_repo_id, status=status_filter)
+
+        if as_json:
+            click.echo(json.dumps([h.model_dump(mode="json") for h in handoffs], indent=2))
+        else:
+            if not handoffs:
+                click.echo("No handoff records found.")
+                return
+            click.secho(f"Handoffs for {actual_repo_id} ({len(handoffs)} found):", fg="cyan", bold=True)
+            for h in handoffs:
+                click.secho(f"\n[*] {h.handoff_id} [{h.status.value}]", fg="yellow", bold=True)
+                click.echo(f"    From      : {h.originating_agent_id} -> {h.receiving_agent_id or 'Any'}")
+                click.echo(f"    Objective : {h.task_objective}")
+                click.echo(f"    Completed : {h.completed_work}")
+                if h.open_risks:
+                    click.echo(f"    Risks     : {', '.join(h.open_risks)}")
+                if h.relevant_memory_ids:
+                    click.echo(f"    Memories  : {', '.join(h.relevant_memory_ids)}")
+                click.echo(f"    Created   : {h.created_at}")
+    except Exception as exc:
+        _emit_error("HANDOFF_FAILED", str(exc), as_json=as_json)
+
+
+@handoff_grp.command("complete")
+@click.argument("handoff_id")
+@click.option("--path", "--repo", "path", default=".", help="Repository path.")
+@click.option("--repo-id", default=None, help="Explicit repository_id override.")
+@click.option("--agent", "receiving_agent_id", default=None, help="Completing agent ID.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def handoff_complete_cmd(
+    handoff_id: str,
+    path: str,
+    repo_id: Optional[str],
+    receiving_agent_id: Optional[str],
+    as_json: bool,
+) -> None:
+    """Mark a handoff as completed by receiving agent."""
+    try:
+        service, repo, state_file = get_service_and_repo(path)
+        actual_repo_id = repo_id if repo_id is not None else repo.repository_id
+        record = service.complete_handoff(handoff_id, repo_id=actual_repo_id, receiving_agent_id=receiving_agent_id)
+        if isinstance(service.store, InMemoryGraphStore):
+            save_persistent_store(service.store, state_file)
+
+        if as_json:
+            click.echo(record.model_dump_json(indent=2))
+        else:
+            click.secho(f"Handoff {record.handoff_id} marked as COMPLETED", fg="green", bold=True)
+            if record.receiving_agent_id:
+                click.echo(f"  Completed by: {record.receiving_agent_id}")
+    except Exception as exc:
+        _emit_error("HANDOFF_FAILED", str(exc), as_json=as_json)
 
 
 @cli.command("eval")

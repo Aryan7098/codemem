@@ -18,6 +18,8 @@ from codemem.cli.main import (
 from codemem.core.models import (
     CodeMemErrorDetail,
     EvidenceInput,
+    HandoffInput,
+    HandoffStatus,
     MemoryInput,
     MemoryType,
 )
@@ -48,7 +50,7 @@ class CodeMemMCPServer:
         self._register_tools()
 
     def _register_tools(self) -> None:
-        """Bind all 7 contract methods as MCP tools."""
+        """Bind contract methods and workflows as MCP tools."""
         self.mcp.tool(name="register_repository")(self.register_repository)
         self.mcp.tool(name="remember")(self.remember)
         self.mcp.tool(name="recall")(self.recall)
@@ -57,6 +59,9 @@ class CodeMemMCPServer:
         self.mcp.tool(name="explain")(self.explain)
         self.mcp.tool(name="check_changes")(self.check_changes)
         self.mcp.tool(name="revalidate_memory")(self.revalidate_memory)
+        self.mcp.tool(name="record_handoff")(self.record_handoff)
+        self.mcp.tool(name="list_handoffs")(self.list_handoffs)
+        self.mcp.tool(name="complete_handoff")(self.complete_handoff)
 
     def _flush_store(self) -> None:
         """Persist in-memory state to disk if backed by InMemoryGraphStore."""
@@ -274,6 +279,75 @@ class CodeMemMCPServer:
                 error_code=code,
                 message=str(exc),
                 details={"memory_id": memory_id, "repo_id": repo_id},
+            ).model_dump(mode="json")
+
+    def record_handoff(
+        self,
+        repository_id: str,
+        originating_agent_id: str,
+        task_objective: str,
+        completed_work: str,
+        receiving_agent_id: Optional[str] = None,
+        open_risks: Optional[List[str]] = None,
+        relevant_memory_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Record a structured agent handoff to preserve task continuity and risks."""
+        try:
+            inp = HandoffInput(
+                repository_id=repository_id,
+                originating_agent_id=originating_agent_id,
+                receiving_agent_id=receiving_agent_id,
+                task_objective=task_objective,
+                completed_work=completed_work,
+                open_risks=open_risks or [],
+                relevant_memory_ids=relevant_memory_ids or [],
+            )
+            record = self.service.record_handoff(inp)
+            self._flush_store()
+            return record.model_dump(mode="json")
+        except ValueError as exc:
+            return CodeMemErrorDetail(
+                error_code="REPO_NOT_FOUND",
+                message=str(exc),
+                details={"repo_id": repository_id},
+            ).model_dump(mode="json")
+
+    def list_handoffs(
+        self,
+        repo_id: str,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List handoffs for a repository, optionally filtered by status."""
+        status_filter = HandoffStatus(status) if status else None
+        handoffs = self.service.list_handoffs(repo_id, status=status_filter)
+        return [h.model_dump(mode="json") for h in handoffs]
+
+    def complete_handoff(
+        self,
+        handoff_id: str,
+        repo_id: Optional[str] = None,
+        receiving_agent_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Mark a handoff as completed by receiving agent."""
+        try:
+            record = self.service.complete_handoff(
+                handoff_id=handoff_id,
+                repo_id=repo_id,
+                receiving_agent_id=receiving_agent_id,
+            )
+            self._flush_store()
+            return record.model_dump(mode="json")
+        except PermissionError as exc:
+            return CodeMemErrorDetail(
+                error_code="SCOPE_VIOLATION",
+                message=str(exc),
+                details={"handoff_id": handoff_id, "repo_id": repo_id},
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            return CodeMemErrorDetail(
+                error_code="HANDOFF_NOT_FOUND",
+                message=str(exc),
+                details={"handoff_id": handoff_id},
             ).model_dump(mode="json")
 
     def run(self) -> None:

@@ -9,7 +9,7 @@ from pathlib import PurePath
 from typing import Any, List, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 def _utc_now_iso() -> str:
@@ -229,3 +229,54 @@ class CodeMemErrorDetail(BaseModel):
     error_code: str
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class HandoffStatus(str, Enum):
+    """Lifecycle status of a cross-agent task handoff."""
+
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class HandoffInput(BaseModel):
+    """Structured input for recording an agent-to-agent task handoff."""
+
+    repository_id: str
+    originating_agent_id: str
+    task_objective: str
+    completed_work: str
+    receiving_agent_id: Optional[str] = None
+    open_risks: List[str] = Field(default_factory=list)
+    relevant_memory_ids: List[str] = Field(default_factory=list)
+    session_id: Optional[str] = None
+
+
+class AgentHandoffRecord(BaseModel):
+    """Durable record of a task handoff between coding agents (PRD Workflow H)."""
+
+    id: str = Field(default_factory=lambda: f"handoff_{uuid4().hex[:12]}")
+    repository_id: str
+    originating_agent_id: str
+    receiving_agent_id: Optional[str] = None
+    task_objective: str
+    completed_work: str
+    open_risks: List[str] = Field(default_factory=list)
+    relevant_memory_ids: List[str] = Field(default_factory=list)
+    status: HandoffStatus = HandoffStatus.PENDING
+    session_id: Optional[str] = None
+    created_at: str = Field(default_factory=_utc_now_iso)
+    updated_at: str = Field(default_factory=_utc_now_iso)
+
+    def __init__(self, **data: Any) -> None:
+        if "handoff_id" in data and "id" not in data:
+            data["id"] = data.pop("handoff_id")
+        super().__init__(**data)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def handoff_id(self) -> str:
+        """Alias for id ensuring backwards and forwards compatibility."""
+        return self.id
+

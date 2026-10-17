@@ -406,6 +406,30 @@ This document tracks all meaningful architectural, technical, and implementation
      - MCP: Expose tool `@mcp.tool(name="revalidate_memory")`.
 - **Tradeoffs & Consequences:** Closes PRD Workflow E and provides coding agents with an explicit, evidence-backed mechanism to verify and refresh cached memories without having to create redundant superseding versions.
 
+---
+
+### ADR-027: First-Class Agent Handoffs & Multi-Agent Task Continuity (`handoff`)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** PRD Workflow H specifies that when coding agents finish a task or pass context to a subsequent agent, they need a structured handoff record. Without first-class handoffs, critical operational knowledge (completed work, open risks, known traps, and relevant memory IDs) is lost between agents in multi-agent workflows.
+- **Decision:**
+  1. **Data Model (`AgentHandoffRecord` & `HandoffInput`):**
+     - Fields: `id`/`handoff_id`, `repository_id`, `originating_agent_id`, `receiving_agent_id`, `task_objective`, `completed_work`, `open_risks`, `relevant_memory_ids`, `status` (`PENDING`, `IN_PROGRESS`, `COMPLETED`), `created_at`, `updated_at`.
+     - Supports dual-access via `id` and computed `handoff_id`.
+  2. **Storage Adapters:**
+     - `InMemoryGraphStore`: Tracks `_handoffs: Dict[str, AgentHandoffRecord]`, filters by `status` and `repo_id`, persists across runs to `.codemem/store.json`.
+     - `FalkorDBAdapter`: Creates `:Handoff` nodes with parameterized Cypher, linking `(:Handoff)-[:FOR_REPO]->(:Repository)`, `(:Handoff)-[:CREATED_BY]->(:Agent)`, `(:Handoff)-[:ASSIGNED_TO]->(:Agent)`, and `(:Handoff)-[:REFERENCES_MEMORY]->(:Memory)`.
+  3. **Core Service (`MemoryService`):**
+     - `record_handoff`: Verifies repository scope and persists new handoff in `PENDING` status.
+     - `get_handoff`: Retrieves handoff with strict repository scope isolation.
+     - `list_handoffs`: Returns sorted list of handoffs optionally filtered by `status`.
+     - `complete_handoff`: Transitions status to `COMPLETED`, records receiving agent ID and timestamp.
+  4. **Transports:**
+     - CLI: Exposes `codemem handoff [record | list | complete]`.
+     - MCP: Exposes `@mcp.tool` for `record_handoff`, `list_handoffs`, and `complete_handoff`.
+- **Tradeoffs & Consequences:** Fulfills PRD Workflow H and ensures seamless task transitions and risk handoffs across distinct agent personas (e.g. Architect -> Coder -> Reviewer) with full evidence traceability.
+
+
 
 
 
