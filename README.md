@@ -7,7 +7,7 @@
 
 **WeMakeDevs × FalkorDB Hackathon Submission**  
 **Track:** Track 2 — Agent Memory and Coordination  
-**Authors:** Aryan Gopinathan ([@Aryan7098](https://github.com/Aryan7098)) & Team  
+**Authors:** Aryan Gopinathan ([@Aryan7098](https://github.com/Aryan7098)) & Shreyan Gopinathan ([@stickero-07](https://github.com/stickero-07))
 **Repository:** [https://github.com/Aryan7098/codemem](https://github.com/Aryan7098/codemem)  
 **Demo Video:** *[Link to Demo Video]* *(Upload demo URL here)*
 
