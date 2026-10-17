@@ -54,6 +54,8 @@ class CodeMemMCPServer:
 
         self.mcp = FastMCP("codemem")
         self._register_tools()
+        self._register_resources()
+        self._register_prompts()
 
     def _register_tools(self) -> None:
         """Bind contract methods and workflows as MCP tools."""
@@ -68,6 +70,154 @@ class CodeMemMCPServer:
         self.mcp.tool(name="record_handoff")(self.record_handoff)
         self.mcp.tool(name="list_handoffs")(self.list_handoffs)
         self.mcp.tool(name="complete_handoff")(self.complete_handoff)
+
+    def _register_resources(self) -> None:
+        """Bind MCP resources for automatic context window injection."""
+        self.mcp.resource("codemem://repo/{repo_id}/status")(self.get_repo_status_resource)
+        self.mcp.resource("codemem://repo/{repo_id}/memories")(self.get_repo_memories_resource)
+        self.mcp.resource("codemem://repo/{repo_id}/handoffs")(self.get_repo_handoffs_resource)
+
+    def _register_prompts(self) -> None:
+        """Bind MCP prompt templates for multi-agent workflows."""
+        self.mcp.prompt(name="session_startup_recall")(self.session_startup_recall_prompt)
+        self.mcp.prompt(name="agent_handoff_briefing")(self.agent_handoff_briefing_prompt)
+
+    # ------------------------------------------------------------------
+    # MCP Resources
+    # ------------------------------------------------------------------
+
+    def get_repo_status_resource(self, repo_id: str) -> str:
+        """
+        Resource URI: codemem://repo/{repo_id}/status
+        Returns JSON summary of repository registration, memory status breakdown, and staleness check.
+        """
+        import json
+        from codemem.core.models import MemoryStatus
+
+        repo = self.service.store.get_repository(repo_id)
+        if repo is None:
+            return json.dumps(
+                CodeMemErrorDetail(
+                    error_code="REPO_NOT_FOUND",
+                    message=f"Repository not registered: {repo_id}",
+                    details={"repo_id": repo_id},
+                ).model_dump(mode="json"),
+                indent=2,
+            )
+
+        memories = self.service.store.get_all_memories(repo_id, include_superseded=False)
+        counts = {status.value: 0 for status in MemoryStatus}
+        for m in memories:
+            counts[m.status.value] = counts.get(m.status.value, 0) + 1
+
+        change_report = self.service.check_changes(repo_id)
+        payload = {
+            "repository": repo.model_dump(mode="json"),
+            "active_memory_count": len(memories),
+            "status_breakdown": counts,
+            "stale_count": change_report.stale_count,
+            "changed_files": change_report.changed_files,
+            "revalidation_recommendations": change_report.revalidation_recommendations,
+        }
+        return json.dumps(payload, indent=2)
+
+    def get_repo_memories_resource(self, repo_id: str) -> str:
+        """
+        Resource URI: codemem://repo/{repo_id}/memories
+        Returns JSON array of all active memories and attached evidence for context injection.
+        """
+        import json
+
+        repo = self.service.store.get_repository(repo_id)
+        if repo is None:
+            return json.dumps(
+                CodeMemErrorDetail(
+                    error_code="REPO_NOT_FOUND",
+                    message=f"Repository not registered: {repo_id}",
+                    details={"repo_id": repo_id},
+                ).model_dump(mode="json"),
+                indent=2,
+            )
+
+        memories = self.service.store.get_all_memories(repo_id, include_superseded=False)
+        payload = {
+            "repository_id": repo_id,
+            "count": len(memories),
+            "memories": [m.model_dump(mode="json") for m in memories],
+        }
+        return json.dumps(payload, indent=2)
+
+    def get_repo_handoffs_resource(self, repo_id: str) -> str:
+        """
+        Resource URI: codemem://repo/{repo_id}/handoffs
+        Returns active 'handoff' and 'bug' memories for cross-session continuity.
+        """
+        import json
+        from codemem.core.models import MemoryType
+
+        repo = self.service.store.get_repository(repo_id)
+        if repo is None:
+            return json.dumps(
+                CodeMemErrorDetail(
+                    error_code="REPO_NOT_FOUND",
+                    message=f"Repository not registered: {repo_id}",
+                    details={"repo_id": repo_id},
+                ).model_dump(mode="json"),
+                indent=2,
+            )
+
+        memories = self.service.store.get_all_memories(repo_id, include_superseded=False)
+        handoffs = [
+            m.model_dump(mode="json")
+            for m in memories
+            if m.memory_type in (MemoryType.HANDOFF, MemoryType.BUG)
+        ]
+        return json.dumps(
+            {"repository_id": repo_id, "handoff_and_bug_count": len(handoffs), "items": handoffs},
+            indent=2,
+        )
+
+    # ------------------------------------------------------------------
+    # MCP Prompts
+    # ------------------------------------------------------------------
+
+    def session_startup_recall_prompt(self, repo_id: str, task_description: str = "general development") -> str:
+        """
+        MCP Prompt: session_startup_recall
+        Guides an LLM coding agent on how to initialize context and verify code freshness at session startup.
+        """
+        return (
+            f"You are starting a coding session on repository '{repo_id}' for task: '{task_description}'.\n\n"
+            "Follow this mandatory CodeMem startup protocol before modifying any files:\n"
+            f"1. Read resource `codemem://repo/{repo_id}/status` or call tool `check_changes(repo_id='{repo_id}')` "
+            "to detect any STALE memories caused by recent git/file modifications.\n"
+            f"2. Read resource `codemem://repo/{repo_id}/handoffs` to inspect open handoff notes and known bugs from prior agents.\n"
+            f"3. Call `recall(repo_id='{repo_id}', query='{task_description}', top_k=5)` to retrieve verified architectural "
+            "facts and API contracts relevant to your task.\n"
+            "4. If `recall` returns `abstained=true`, inspect the source files directly and anchor new discoveries via `remember`."
+        )
+
+    def agent_handoff_briefing_prompt(
+        self,
+        repo_id: str,
+        session_id: str = "default-session",
+        summary: str = "",
+    ) -> str:
+        """
+        MCP Prompt: agent_handoff_briefing
+        Guides an LLM coding agent on how to package and persist handoff knowledge before ending a session.
+        """
+        return (
+            f"You are preparing an agent handoff briefing for repository '{repo_id}' (session '{session_id}').\n"
+            f"Session summary context: {summary or 'End-of-session handoff'}\n\n"
+            "Perform these steps to ensure the next coding agent has verifiable ground truth:\n"
+            "1. For any existing claims invalidated by your code edits, call `update(memory_id=..., new_claim=..., reason=..., repo_id=...)` "
+            "so outdated versions transition to SUPERSEDED.\n"
+            "2. For every new architectural decision, API contract, or bug fix, call `remember` with exact `evidence` "
+            "(`file_path`, `symbol`, and `test_command`/`test_passed` if verified by pytest).\n"
+            f"3. Record any unfinished work or open risks using `remember(repository_id='{repo_id}', memory_type='handoff', ...)` "
+            f"so the next agent can read `codemem://repo/{repo_id}/handoffs` immediately."
+        )
 
     def _flush_store(self) -> None:
         """Persist in-memory state to disk if backed by InMemoryGraphStore."""

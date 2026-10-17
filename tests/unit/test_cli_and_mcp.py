@@ -765,4 +765,68 @@ def test_mcp_server_backend_switching(monkeypatch):
     assert server2.service.store is mock_adapter_instance
 
 
+def test_mcp_resources_and_prompts(tmp_path: Path) -> None:
+    """Verify FastMCP resources (status, memories, handoffs) and prompts (startup, handoff)."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "api.py").write_text("def handle_request():\n    return 200\n", encoding="utf-8")
+
+    service = MemoryService(store=InMemoryGraphStore())
+    mcp_server = CodeMemMCPServer(service=service)
+
+    repo_resp = mcp_server.register_repository(str(tmp_path))
+    repo_id = repo_resp["repository_id"]
+
+    # Record an architecture memory and a handoff memory
+    mcp_server.remember(
+        repository_id=repo_id,
+        claim="API handler returns HTTP 200",
+        memory_type="architecture",
+        evidence=[{"file_path": "src/api.py", "symbol": "handle_request"}],
+    )
+    mcp_server.remember(
+        repository_id=repo_id,
+        claim="Rate limiting middleware still needs Redis token bucket wiring",
+        memory_type="handoff",
+        tags=["handoff", "redis"],
+    )
+
+    # 1. Test codemem://repo/{repo_id}/status resource
+    status_json = mcp_server.get_repo_status_resource(repo_id)
+    status_data = json.loads(status_json)
+    assert status_data["active_memory_count"] == 2
+    assert status_data["status_breakdown"]["OBSERVED"] == 1
+    assert status_data["status_breakdown"]["INFERRED"] == 1
+
+    # 2. Test codemem://repo/{repo_id}/memories resource
+    memories_json = mcp_server.get_repo_memories_resource(repo_id)
+    memories_data = json.loads(memories_json)
+    assert memories_data["count"] == 2
+    assert len(memories_data["memories"]) == 2
+
+    # 3. Test codemem://repo/{repo_id}/handoffs resource
+    handoffs_json = mcp_server.get_repo_handoffs_resource(repo_id)
+    handoffs_data = json.loads(handoffs_json)
+    assert handoffs_data["handoff_and_bug_count"] == 1
+    assert "Rate limiting" in handoffs_data["items"][0]["claim"]
+
+    # 4. Test error handling on unknown repo resource
+    err_json = mcp_server.get_repo_status_resource("unknown_repo")
+    assert json.loads(err_json)["error_code"] == "REPO_NOT_FOUND"
+
+    # 5. Test MCP Prompts
+    startup_prompt = mcp_server.session_startup_recall_prompt(repo_id=repo_id, task_description="Add rate limiting")
+    assert f"codemem://repo/{repo_id}/status" in startup_prompt
+    assert "Add rate limiting" in startup_prompt
+
+    handoff_prompt = mcp_server.agent_handoff_briefing_prompt(
+        repo_id=repo_id,
+        session_id="sess_42",
+        summary="Implemented auth",
+    )
+    assert f"codemem://repo/{repo_id}/handoffs" in handoff_prompt
+    assert "sess_42" in handoff_prompt
+
+
+
 
