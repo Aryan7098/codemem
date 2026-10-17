@@ -361,6 +361,31 @@ This document tracks all meaningful architectural, technical, and implementation
   3. Validate through unit and integration tests (`test_persistence_across_restart` and Track 1 of `examples/demo.py`) that dropping in-memory stores and re-instantiating fresh services from disk restores 100% of memories, supersedes chains, and contradictions.
 - **Tradeoffs & Consequences:** Enables reliable cross-restart persistence in all deployment modes (Docker FalkorDB or local offline JSON store) with zero test flakiness.
 
+---
+
+### ADR-025: Evaluation Benchmark Harness & LongMemEval Grounding (`codemem eval`)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** PRD Section 12 & 13 mandate an automated, reproducible evaluation suite covering the 5 core LongMemEval capabilities plus change awareness and scope isolation, reporting category-level metrics (precision, recall, F1, pass rate) and comparative metrics (memory-enabled vs memory-disabled).
+- **Decision:**
+  1. **Dataset & Scenarios (`src/codemem/evaluation/dataset.py`):** Define canonical test cases covering:
+     - Extraction & AST Anchoring (`EXT-01`, `EXT-02`)
+     - Cross-Session Persistence (`PER-01`)
+     - Cross-Agent Provenance & Handoffs (`CAG-01`)
+     - Temporal Reasoning & Revision History (`TMP-01`)
+     - Non-Destructive Knowledge Updates (`KUP-01`)
+     - Conservative Abstention on Ungrounded/Weak Queries (`ABS-01`, `ABS-02`)
+     - Source Mutation Staleness Detection (`CHG-01`)
+     - Multi-Repo Scope Leak Prevention (`SCP-01`)
+  2. **Benchmark Runner (`src/codemem/evaluation/runner.py`):**
+     - Executes isolated test runs in temporary repositories.
+     - Computes category-level precision, recall, F1, and pass rates.
+     - Computes comparative trials comparing file inspection counts, execution latencies, and knowledge preservation across sessions.
+  3. **CLI Integration (`codemem eval`):**
+     - Emits rich terminal tables summarizing category metrics and comparative speedup/inspection reduction.
+     - Supports `--json` for machine-readable CI output and `--output <file>` for persisting benchmark reports.
+- **Tradeoffs & Consequences:** Provides judges and contributors with a single-command reproducibility check (`codemem eval`) that evaluates true memory infrastructure quality with 100% offline determinism.
+
 
 
 

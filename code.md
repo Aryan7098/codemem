@@ -180,11 +180,16 @@ This document details how execution travels across files, functions, and modules
 | `src/codemem/core/service.py` | Production MemoryService domain engine (deduplication, conflicts, scoping) | Implemented & Verified |
 | `tests/unit/test_service.py` | Unit tests for MemoryService (12/12 passing) | Implemented & Verified |
 | `src/codemem/cli/__init__.py` | CLI transport package initialization | Implemented (Owner B) |
-| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher | Implemented & Enhanced |
+| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher, eval | Implemented & Enhanced |
 | `src/codemem/mcp/__init__.py` | MCP transport package initialization | Implemented (Owner B) |
 | `src/codemem/mcp/server.py` | FastMCP/MCPServer 7 contract tools with 2-way state persistence | Implemented & Enhanced |
 | `tests/unit/test_cli_and_mcp.py` | Unit & integration tests for CLI and MCP (5/5 passing) | Implemented & Verified |
 | `examples/demo.py` | Multi-track reproducible demo script (CLI, MCP, Interoperability) | Implemented & Verified |
+| `src/codemem/evaluation/models.py` | Pydantic schemas for benchmark categories, metrics, comparative results | Implemented & Verified |
+| `src/codemem/evaluation/dataset.py` | Canonical LongMemEval & RepoMem evaluation test scenarios | Implemented & Verified |
+| `src/codemem/evaluation/runner.py` | Automated evaluation harness runner and comparative metrics engine | Implemented & Verified |
+| `src/codemem/evaluation/__init__.py` | Evaluation package exports | Implemented & Verified |
+| `tests/unit/test_evaluation.py` | Unit tests for evaluation dataset, runner, and CLI command (3/3 passing) | Implemented & Verified |
 
 ---
 
@@ -194,7 +199,7 @@ This document details how execution travels across files, functions, and modules
 ```
 1. CLI Invocation:
    cli/main.py :: cli() -> command handler:
-   - init, remember, recall, update, history, explain, check-changes, status, mcp
+   - init, remember, recall, update, history, explain, check-changes, status, mcp, eval
    Supports both --path and --repo argument flags for PRD compatibility.
 2. State Hydration:
    _get_state_file_path() resolves git root or CODEMEM_STORE_PATH -> .codemem/store.json
@@ -285,6 +290,33 @@ This document details how execution travels across files, functions, and modules
      - If memory belongs to another repository, raises PermissionError("Scope violation: ...").
      - CLI catches PermissionError -> emits SCOPE_VIOLATION structured JSON error with exit code 1.
      - MCP server catches PermissionError -> returns CodeMemErrorDetail(error_code="SCOPE_VIOLATION").
+```
+
+---
+
+### Flow J: Benchmark Evaluation (`codemem eval`)
+```
+1. CLI Entrypoint:
+   cli/main.py :: eval_cmd()
+   └─ Instantiates evaluation/runner.py :: BenchmarkRunner()
+
+2. Scenario Execution (evaluation/runner.py):
+   - Loads evaluation/dataset.py :: get_standard_evaluation_cases()
+   - Creates isolated temporary test workspace with Python source code
+   - Prepopulates graph facts (extraction, test-verified, handoffs, revision chains)
+   - Executes all test cases across 8 categories:
+     Extraction, Persistence, Cross-Agent, Temporal Reasoning, Knowledge Update,
+     Abstention, Change Awareness, Scope Isolation
+   - Records pass/fail status, execution latencies, and assertion details
+
+3. Metric Aggregation & Comparative Profiling:
+   - Aggregates category-level accuracy, precision, recall, and F1
+   - Computes comparative trials (file inspections saved, speedup multiplier)
+   - Generates BenchmarkReport (models.py)
+
+4. Output Rendering:
+   - CLI prints rich ANSI table of category metrics and comparative benchmarks
+   - Supports --json for automated CI pipelines and --output <file> for report persistence
 ```
 
 

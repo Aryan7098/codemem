@@ -488,5 +488,50 @@ def mcp_cmd(path: str) -> None:
     create_mcp_server(repo_path=path).run()
 
 
+@cli.command("eval")
+@click.option("--json", "as_json", is_flag=True, help="Output benchmark results as JSON.")
+@click.option("--output", "output_file", default=None, help="Save benchmark report to a file.")
+def eval_cmd(as_json: bool, output_file: Optional[str]) -> None:
+    """Run the reproducible LongMemEval evaluation benchmark suite."""
+    from codemem.evaluation import BenchmarkRunner
+
+    runner = BenchmarkRunner()
+    report = runner.run_benchmark()
+
+    if output_file:
+        Path(output_file).write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    if as_json:
+        click.echo(report.model_dump_json(indent=2))
+        return
+
+    click.secho("\n===========================================================================", fg="cyan", bold=True)
+    click.secho("  CODEMEM EVALUATION BENCHMARK (LongMemEval & RepoMem Categories)", fg="cyan", bold=True)
+    click.secho("===========================================================================", fg="cyan", bold=True)
+    click.echo(f"Timestamp          : {report.timestamp}")
+    click.echo(f"Scenarios Evaluated: {report.total_scenarios}")
+    click.echo(f"Passed             : {report.total_passed}/{report.total_scenarios} ({report.overall_pass_rate}%)")
+    click.echo("\n--- CATEGORY-LEVEL ACCURACY & RECALL ---")
+    click.echo(f"{'Category':<22} {'Passed':<10} {'Pass Rate':<12} {'Precision':<10} {'Recall':<10} {'F1':<8}")
+    click.echo("-" * 72)
+    for cat in report.category_results:
+        prec = f"{cat.precision:.2f}" if cat.precision is not None else "N/A"
+        rec = f"{cat.recall:.2f}" if cat.recall is not None else "N/A"
+        f1 = f"{cat.f1_score:.2f}" if cat.f1_score is not None else "N/A"
+        click.echo(f"{cat.category.value:<22} {f'{cat.passed_tests}/{cat.total_tests}':<10} {f'{cat.pass_rate}%':<12} {prec:<10} {rec:<10} {f1:<8}")
+
+    click.echo("\n--- COMPARATIVE PERFORMANCE (Memory Enabled vs Memory Disabled) ---")
+    for comp in report.comparative_results:
+        click.secho(f"[*] {comp.scenario}", fg="green", bold=True)
+        click.echo(f"    Task       : {comp.task_description}")
+        click.echo(f"    Inspections: {comp.memory_disabled_inspections} files -> {comp.memory_enabled_inspections} files ({comp.reduction_pct:.1f}% reduction)")
+        click.echo(f"    Latency    : {comp.memory_disabled_latency_ms:.1f}ms -> {comp.memory_enabled_latency_ms:.1f}ms ({comp.speedup_multiplier:.1f}x speedup)")
+        click.echo(f"    Knowledge  : {'Preserved across sessions' if comp.knowledge_preserved else 'Lost'}")
+
+    click.secho("\n===========================================================================", fg="cyan", bold=True)
+    click.secho(f"  RESULT: {report.summary}", fg="green", bold=True)
+    click.secho("===========================================================================\n", fg="cyan", bold=True)
+
+
 if __name__ == "__main__":
     cli()
