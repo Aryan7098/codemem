@@ -663,3 +663,106 @@ def test_falkordb_store_with_mock_client():
     assert any("MERGE (c:Concept" in c for c in cypher_calls_after)
 
 
+def test_backend_resolution_and_factory(monkeypatch):
+    """Verify resolve_backend_name and create_graph_store configuration and defaults."""
+    from unittest.mock import MagicMock
+    from codemem.graph.adapter import FalkorDBAdapter
+    from codemem.graph.factory import create_graph_store, resolve_backend_name
+    from codemem.graph.in_memory import InMemoryGraphStore
+
+    # 1. Defaults to memory
+    monkeypatch.delenv("CODEMEM_BACKEND", raising=False)
+    assert resolve_backend_name() == "memory"
+    assert isinstance(create_graph_store(), InMemoryGraphStore)
+
+    # 2. Respects CODEMEM_BACKEND=falkordb
+    monkeypatch.setenv("CODEMEM_BACKEND", "falkordb")
+    assert resolve_backend_name() == "falkordb"
+
+    # 3. Respects explicit backend
+    assert resolve_backend_name("memory") == "memory"
+    assert resolve_backend_name("FALKORDB") == "falkordb"
+
+    # 4. create_graph_store("falkordb") reads env vars and passes them to FalkorDBAdapter
+    monkeypatch.setenv("FALKORDB_HOST", "falkor-node.internal")
+    monkeypatch.setenv("FALKORDB_PORT", "6380")
+    monkeypatch.setenv("FALKORDB_GRAPH", "graph_test")
+    monkeypatch.setenv("FALKORDB_PASSWORD", "secret123")
+
+    mock_adapter_cls = MagicMock()
+    mock_instance = MagicMock(spec=FalkorDBAdapter)
+    mock_adapter_cls.return_value = mock_instance
+    monkeypatch.setattr("codemem.graph.factory.FalkorDBAdapter", mock_adapter_cls)
+
+    store = create_graph_store("falkordb")
+    assert store is mock_instance
+    mock_adapter_cls.assert_called_once()
+    kwargs = mock_adapter_cls.call_args.kwargs
+    assert kwargs["host"] == "falkor-node.internal"
+    assert kwargs["port"] == 6380
+    assert kwargs.get("graph_id") == "graph_test" or kwargs.get("graph_name") == "graph_test"
+    assert kwargs["password"] == "secret123"
+
+
+def test_cli_backend_switching_and_no_store_file(temp_repo_env, monkeypatch):
+    """Verify running CLI with --backend falkordb or CODEMEM_BACKEND=falkordb routes to FalkorDBAdapter without writing store.json."""
+    from unittest.mock import MagicMock
+    from click.testing import CliRunner
+    from codemem.cli.main import cli
+    from codemem.core.models import RepositoryInfo
+    from codemem.graph.adapter import FalkorDBAdapter
+
+    repo_path, _ = temp_repo_env
+    runner = CliRunner()
+    store_file = Path(repo_path) / ".codemem" / "store.json"
+
+    mock_adapter_instance = MagicMock(spec=FalkorDBAdapter)
+    mock_repo = RepositoryInfo(
+        repository_id="mock-falkor-repo",
+        root_path=str(Path(repo_path).resolve()),
+        git_available=False,
+    )
+    mock_adapter_instance.upsert_repository.return_value = mock_repo
+    mock_adapter_instance.get_repository.return_value = mock_repo
+    mock_adapter_cls = MagicMock(return_value=mock_adapter_instance)
+    monkeypatch.setattr("codemem.graph.factory.FalkorDBAdapter", mock_adapter_cls)
+
+    # 1. Run with top-level --backend falkordb option
+    res1 = runner.invoke(cli, ["--backend", "falkordb", "init", "--path", repo_path, "--json"])
+    assert res1.exit_code == 0, res1.output
+    assert not store_file.exists(), "store.json should NOT be created when using falkordb backend"
+
+    # 2. Run with subcommand option recall "..." --backend falkordb
+    mock_adapter_instance.get_all_memories.return_value = []
+    mock_adapter_instance.traverse_concept_graph.return_value = []
+    mock_adapter_instance.vector_search.return_value = []
+    mock_adapter_instance.query_memories_by_terms.return_value = []
+    res2 = runner.invoke(cli, ["recall", "test query", "--path", repo_path, "--backend", "falkordb", "--json"])
+    assert res2.exit_code == 0, res2.output
+    assert not store_file.exists(), "store.json should NOT be created when using falkordb backend"
+
+    # 3. Run with CODEMEM_BACKEND=falkordb envvar
+    res3 = runner.invoke(cli, ["init", "--path", repo_path, "--json"], env={"CODEMEM_BACKEND": "falkordb"})
+    assert res3.exit_code == 0, res3.output
+    assert not store_file.exists(), "store.json should NOT be created when using falkordb backend"
+
+
+def test_mcp_server_backend_switching(monkeypatch):
+    """Verify CodeMemMCPServer(backend='falkordb') initializes MemoryService with FalkorDBAdapter."""
+    from unittest.mock import MagicMock
+    from codemem.graph.adapter import FalkorDBAdapter
+    from codemem.mcp.server import CodeMemMCPServer, create_mcp_server
+
+    mock_adapter_instance = MagicMock(spec=FalkorDBAdapter)
+    mock_adapter_cls = MagicMock(return_value=mock_adapter_instance)
+    monkeypatch.setattr("codemem.graph.factory.FalkorDBAdapter", mock_adapter_cls)
+
+    server = CodeMemMCPServer(backend="falkordb")
+    assert server.service.store is mock_adapter_instance
+
+    # Test factory with backend
+    server2 = create_mcp_server(backend="falkordb")
+    assert server2.service.store is mock_adapter_instance
+
+
+

@@ -24,7 +24,7 @@ from codemem.core.models import (
     MemoryType,
 )
 from codemem.core.service import MemoryService
-from codemem.graph.factory import create_graph_store
+from codemem.graph.factory import create_graph_store, resolve_backend_name
 from codemem.graph.in_memory import InMemoryGraphStore
 
 
@@ -37,6 +37,7 @@ class CodeMemMCPServer:
     def __init__(
         self,
         service: Optional[MemoryService] = None,
+        backend: Optional[str] = None,
         repo_path: str = ".",
     ) -> None:
         self.repo_path = repo_path
@@ -44,8 +45,10 @@ class CodeMemMCPServer:
         if service is not None:
             self.service = service
         else:
-            store = create_graph_store()
-            if isinstance(store, InMemoryGraphStore):
+            resolved = resolve_backend_name(backend)
+            if resolved == "falkordb":
+                store = create_graph_store("falkordb")
+            else:
                 store = load_persistent_store(self._state_file)
             self.service = MemoryService(store=store)
 
@@ -360,11 +363,19 @@ class CodeMemMCPServer:
 
 def create_mcp_server(
     service: Optional[MemoryService] = None,
+    backend: Optional[str] = None,
     repo_path: str = ".",
 ) -> CodeMemMCPServer:
     """Factory function for creating a CodeMemMCPServer instance."""
-    return CodeMemMCPServer(service=service, repo_path=repo_path)
+    return CodeMemMCPServer(service=service, backend=backend, repo_path=repo_path)
 
 
 if __name__ == "__main__":
-    create_mcp_server().run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="CodeMem MCP Server")
+    parser.add_argument("--backend", default=None, choices=["memory", "falkordb"], help="Graph storage backend")
+    parser.add_argument("--repo-path", default=".", help="Repository root path")
+    args = parser.parse_args()
+
+    create_mcp_server(backend=args.backend, repo_path=args.repo_path).run()

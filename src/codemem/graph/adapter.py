@@ -154,11 +154,12 @@ class FalkorDBAdapter:
         graph_id: str = "codemem",
         graph_client: Optional[Any] = None,
         lazy_connect: bool = False,
+        graph_name: Optional[str] = None,
     ) -> None:
         self.host = host
         self.port = port
         self.password = password
-        self.graph_id = graph_id
+        self.graph_id = graph_name or graph_id
         self._graph = graph_client
 
         if self._graph is None and not lazy_connect:
@@ -176,8 +177,8 @@ class FalkorDBAdapter:
         except Exception as exc:
             logger.warning("FalkorDB connection failed at %s:%s - %s", self.host, self.port, exc)
             raise ConnectionError(
-                f"Failed to connect to FalkorDB at {self.host}:{self.port}. "
-                "Ensure docker-compose is running or set GRAPH_BACKEND=memory."
+                f"DATABASE_UNAVAILABLE: Failed to connect to FalkorDB at {self.host}:{self.port}. "
+                "Ensure docker-compose is running or set CODEMEM_BACKEND=memory."
             ) from exc
 
     def _init_schema_indices(self) -> None:

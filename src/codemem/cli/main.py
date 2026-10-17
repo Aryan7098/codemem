@@ -23,7 +23,7 @@ from codemem.core.models import (
     RepositoryInfo,
 )
 from codemem.core.service import MemoryService
-from codemem.graph.factory import create_graph_store, get_backend_name
+from codemem.graph.factory import create_graph_store, get_backend_name, resolve_backend_name
 from codemem.graph.in_memory import InMemoryGraphStore
 
 
@@ -90,10 +90,19 @@ def save_persistent_store(store: InMemoryGraphStore, state_file: Path) -> None:
     state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def get_service_and_repo(path: str = ".") -> Tuple[MemoryService, RepositoryInfo, Path]:
+def get_service_and_repo(
+    path: str = ".",
+    backend: Optional[str] = None,
+) -> Tuple[MemoryService, RepositoryInfo, Path]:
     """Initialize MemoryService using CODEMEM_BACKEND ('falkordb' or persistent 'memory')."""
     state_file = _get_state_file_path(path)
-    if get_backend_name() == "falkordb":
+    if backend is None:
+        ctx = click.get_current_context(silent=True)
+        if ctx and ctx.obj and isinstance(ctx.obj, dict):
+            backend = ctx.obj.get("backend")
+
+    resolved = resolve_backend_name(backend)
+    if resolved == "falkordb":
         store = create_graph_store("falkordb")
         service = MemoryService(store=store)
         repo = service.register_repository(path)
@@ -149,7 +158,7 @@ def _parse_evidence_specs(
 
 def _emit_error(error_code: str, message: str, as_json: bool = False) -> None:
     """Emit structured CodeMemErrorDetail and exit with non-zero code."""
-    if "DATABASE_UNAVAILABLE" in message:
+    if "DATABASE_UNAVAILABLE" in message or "Failed to connect to FalkorDB" in message:
         error_code = "DATABASE_UNAVAILABLE"
     err = CodeMemErrorDetail(error_code=error_code, message=message)
     if as_json:
@@ -160,18 +169,35 @@ def _emit_error(error_code: str, message: str, as_json: bool = False) -> None:
 
 
 @click.group()
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    envvar="CODEMEM_BACKEND",
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.version_option(version="0.1.0", prog_name="codemem")
-def cli() -> None:
+@click.pass_context
+def cli(ctx: click.Context, backend: Optional[str] = None) -> None:
     """CodeMem: Local-first, evidence-backed shared memory layer for coding agents."""
+    ctx.ensure_object(dict)
+    if backend:
+        ctx.obj["backend"] = backend
 
 
 @cli.command("init")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Path to repository root.")
 @click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
-def init_cmd(path: str, as_json: bool) -> None:
+def init_cmd(path: str, as_json: bool, backend: Optional[str] = None) -> None:
     """Register and initialize a repository scope."""
     try:
-        _, repo, _ = get_service_and_repo(path)
+        _, repo, _ = get_service_and_repo(path, backend=backend)
         if as_json:
             click.echo(repo.model_dump_json(indent=2))
         else:
@@ -179,11 +205,18 @@ def init_cmd(path: str, as_json: bool) -> None:
             click.echo(f"  Root Path : {repo.root_path}")
             click.echo(f"  Git Active: {repo.git_available} (HEAD: {repo.head_commit or 'N/A'})")
     except Exception as exc:
-        _emit_error("INVALID_DIRECTORY", str(exc), as_json=as_json)
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "INVALID_DIRECTORY"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("remember")
 @click.argument("claim")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--subject", default=None, help="Entity or component name.")
@@ -223,10 +256,11 @@ def remember_cmd(
     agent_id: str,
     session_id: str,
     as_json: bool,
+    backend: Optional[str] = None,
 ) -> None:
     """Store a new codebase claim with optional evidence anchors."""
     try:
-        service, repo, state_file = get_service_and_repo(path)
+        service, repo, state_file = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
 
         ev_inputs = _parse_evidence_specs(
@@ -263,11 +297,18 @@ def remember_cmd(
     except ValueError as exc:
         _emit_error("INVALID_EVIDENCE_PATH", str(exc), as_json=as_json)
     except Exception as exc:
-        _emit_error("DATABASE_ERROR", str(exc), as_json=as_json)
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "DATABASE_ERROR"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("recall")
 @click.argument("query")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--top-k", default=5, type=int, help="Maximum results to return.")
@@ -280,10 +321,11 @@ def recall_cmd(
     top_k: int,
     include_stale: bool,
     as_json: bool,
+    backend: Optional[str] = None,
 ) -> None:
     """Search repository memories with evidence-aware ranking and abstention."""
     try:
-        service, repo, _ = get_service_and_repo(path)
+        service, repo, _ = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         response = service.recall(
             repo_id=target_repo_id,
@@ -310,13 +352,20 @@ def recall_cmd(
                 sym_str = f":{ev.symbol}" if ev.symbol else ""
                 click.echo(f"   - Evidence: {ev.file_path}{sym_str}")
     except Exception as exc:
-        _emit_error("REPO_NOT_FOUND", str(exc), as_json=as_json)
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "REPO_NOT_FOUND"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("update")
 @click.argument("memory_id")
 @click.argument("new_claim")
 @click.option("--reason", required=True, help="Audit reason for superseding the memory.")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option(
@@ -334,10 +383,11 @@ def update_cmd(
     repo_id: Optional[str],
     evidence_specs: Tuple[str, ...],
     as_json: bool,
+    backend: Optional[str] = None,
 ) -> None:
     """Supersede an existing memory version with an updated claim."""
     try:
-        service, repo, state_file = get_service_and_repo(path)
+        service, repo, state_file = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         ev_inputs = _parse_evidence_specs(evidence_specs, test_cmd=None, test_passed=None) if evidence_specs else None
 
@@ -362,18 +412,31 @@ def update_cmd(
     except ValueError as exc:
         _emit_error("MEMORY_NOT_FOUND", str(exc), as_json=as_json)
     except Exception as exc:
-        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "SCOPE_VIOLATION"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("history")
 @click.argument("identifier")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
-def history_cmd(identifier: str, path: str, repo_id: Optional[str], as_json: bool) -> None:
+def history_cmd(
+    identifier: str,
+    path: str,
+    repo_id: Optional[str],
+    as_json: bool,
+    backend: Optional[str] = None,
+) -> None:
     """Show chronological revision history for a memory_id or logical_fact_id."""
     try:
-        service, repo, _ = get_service_and_repo(path)
+        service, repo, _ = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         hist = service.history(identifier=identifier, repo_id=target_repo_id)
 
@@ -389,17 +452,32 @@ def history_cmd(identifier: str, path: str, repo_id: Optional[str], as_json: boo
         _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
     except ValueError as exc:
         _emit_error("FACT_NOT_FOUND", str(exc), as_json=as_json)
+    except Exception as exc:
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "FACT_NOT_FOUND"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("explain")
 @click.argument("memory_id")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
-def explain_cmd(memory_id: str, path: str, repo_id: Optional[str], as_json: bool) -> None:
+def explain_cmd(
+    memory_id: str,
+    path: str,
+    repo_id: Optional[str],
+    as_json: bool,
+    backend: Optional[str] = None,
+) -> None:
     """Inspect full provenance, evidence hashes, and freshness of a memory."""
     try:
-        service, repo, _ = get_service_and_repo(path)
+        service, repo, _ = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         explanation = service.explain(memory_id=memory_id, repo_id=target_repo_id)
 
@@ -421,16 +499,30 @@ def explain_cmd(memory_id: str, path: str, repo_id: Optional[str], as_json: bool
         _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
     except ValueError as exc:
         _emit_error("MEMORY_NOT_FOUND", str(exc), as_json=as_json)
+    except Exception as exc:
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "MEMORY_NOT_FOUND"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("check-changes")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
-def check_changes_cmd(path: str, repo_id: Optional[str], as_json: bool) -> None:
+def check_changes_cmd(
+    path: str,
+    repo_id: Optional[str],
+    as_json: bool,
+    backend: Optional[str] = None,
+) -> None:
     """Detect modified evidence files and flag affected memories as STALE."""
     try:
-        service, repo, state_file = get_service_and_repo(path)
+        service, repo, state_file = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         report = service.check_changes(repo_id=target_repo_id)
 
@@ -449,10 +541,19 @@ def check_changes_cmd(path: str, repo_id: Optional[str], as_json: bool) -> None:
                 click.echo(f"  - {rec}")
     except ValueError as exc:
         _emit_error("REPO_NOT_FOUND", str(exc), as_json=as_json)
+    except Exception as exc:
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "REPO_NOT_FOUND"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("revalidate")
 @click.argument("memory_id")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--test-cmd", default=None, help="Optional test command that verified the fact.")
@@ -465,10 +566,11 @@ def revalidate_cmd(
     test_cmd: Optional[str],
     test_passed: bool,
     as_json: bool,
+    backend: Optional[str] = None,
 ) -> None:
     """Revalidate a stale or observed memory against current code state."""
     try:
-        service, repo, state_file = get_service_and_repo(path)
+        service, repo, state_file = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         revalidated = service.revalidate(
             memory_id=memory_id,
@@ -493,17 +595,24 @@ def revalidate_cmd(
     except ValueError as exc:
         _emit_error("MEMORY_NOT_FOUND", str(exc), as_json=as_json)
     except Exception as exc:
-        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "SCOPE_VIOLATION"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("status")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
 @click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
-def status_cmd(path: str, repo_id: Optional[str], as_json: bool) -> None:
+def status_cmd(path: str, repo_id: Optional[str], as_json: bool, backend: Optional[str] = None) -> None:
     """Show current repository memory status, fact counts, and freshness."""
     try:
-        service, repo, state_file = get_service_and_repo(path)
+        service, repo, state_file = get_service_and_repo(path, backend=backend)
         target_repo_id = repo_id or repo.repository_id
         all_active = service.store.get_all_memories(target_repo_id, include_superseded=False)
         all_with_superseded = service.store.get_all_memories(target_repo_id, include_superseded=True)
@@ -539,15 +648,22 @@ def status_cmd(path: str, repo_id: Optional[str], as_json: bool) -> None:
         click.echo(f"  Active Memories : {len(all_active)} (Total Versions: {len(all_with_superseded)})")
         click.echo(f"  Status Breakdown: {verified_count} VERIFIED, {observed_count} OBSERVED, {inferred_count} INFERRED, {stale_count} STALE")
     except Exception as exc:
-        _emit_error("INVALID_DIRECTORY", str(exc), as_json=as_json)
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "INVALID_DIRECTORY"
+        _emit_error(code, str(exc), as_json=as_json)
 
 
 @cli.command("mcp")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
-def mcp_cmd(path: str) -> None:
+def mcp_cmd(path: str, backend: Optional[str] = None) -> None:
     """Launch the CodeMem MCP server over stdio for LLM coding agents."""
     from codemem.mcp.server import create_mcp_server
-    create_mcp_server(repo_path=path).run()
+    create_mcp_server(backend=backend, repo_path=path).run()
 
 
 @cli.group("handoff")
