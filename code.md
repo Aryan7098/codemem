@@ -369,6 +369,28 @@ This document details how execution travels across files, functions, and modules
               (:Handoff)-[:REFERENCES_MEMORY]->(:Memory)
 ```
 
+---
+
+### Flow M: Concurrent Multi-Agent Access & Synchronization
+```
+1. Invocation & Access Contention:
+   - Parallel worker threads / agent processes execute simultaneous operations:
+     - ThreadGroup A: remember() & record_handoff()
+     - ThreadGroup B: recall() & traverse_concept_graph()
+     - ThreadGroup C: complete_handoff() & revalidate()
+
+2. Synchronization Mechanism (graph/in_memory.py :: InMemoryGraphStore):
+   - Reentrant RLock (self._lock) guarantees atomic graph mutations.
+   - All dictionary writes and updates are serialized under the lock.
+   - Iteration loops take defensive list copies (list(self._memories.values())) to prevent RuntimeError during parallel mutations.
+
+3. Concurrency Guarantees (tests/unit/test_concurrency.py):
+   - Zero lost writes under multi-agent thread pool execution.
+   - Zero deadlocks or race conditions under simultaneous read/write contention.
+   - Deterministic deduplication when multiple agents remember identical claims concurrently.
+```
+
+
 
 
 
