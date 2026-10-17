@@ -56,6 +56,7 @@ class CodeMemMCPServer:
         self.mcp.tool(name="history")(self.history)
         self.mcp.tool(name="explain")(self.explain)
         self.mcp.tool(name="check_changes")(self.check_changes)
+        self.mcp.tool(name="revalidate_memory")(self.revalidate_memory)
 
     def _flush_store(self) -> None:
         """Persist in-memory state to disk if backed by InMemoryGraphStore."""
@@ -241,6 +242,38 @@ class CodeMemMCPServer:
                 error_code="REPO_NOT_FOUND",
                 message=str(exc),
                 details={"repo_id": repo_id},
+            ).model_dump(mode="json")
+
+    def revalidate_memory(
+        self,
+        memory_id: str,
+        repo_id: str,
+        test_command: Optional[str] = None,
+        test_passed: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Revalidate a stale or observed memory against the current codebase."""
+        try:
+            mem = self.service.revalidate(
+                memory_id=memory_id,
+                repo_id=repo_id,
+                test_command=test_command,
+                test_passed=test_passed,
+            )
+            self._flush_store()
+            return mem.model_dump(mode="json")
+        except PermissionError as exc:
+            return CodeMemErrorDetail(
+                error_code="SCOPE_VIOLATION",
+                message=str(exc),
+                details={"memory_id": memory_id, "repo_id": repo_id},
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            raw_mem = self.service.store.get_memory(memory_id, repo_id=None)
+            code = "SCOPE_VIOLATION" if (raw_mem is not None and raw_mem.repository_id != repo_id) else "MEMORY_NOT_FOUND"
+            return CodeMemErrorDetail(
+                error_code=code,
+                message=str(exc),
+                details={"memory_id": memory_id, "repo_id": repo_id},
             ).model_dump(mode="json")
 
     def run(self) -> None:

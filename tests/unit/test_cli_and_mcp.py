@@ -234,6 +234,33 @@ def test_cli_full_lifecycle(temp_repo_env):
     assert "Detected" in res_check_stale.output
     assert "stale memory record(s)!" in res_check_stale.output
 
+    # 8. revalidate memory
+    # Restore code file and revalidate with passing test
+    py_file.write_text(
+        "class TokenValidator:\n"
+        "    def verify_token(self, token: str) -> bool:\n"
+        "        return token == 'valid'\n",
+        encoding="utf-8",
+    )
+    res_reval = runner.invoke(
+        cli,
+        [
+            "revalidate",
+            mem2_id,
+            "--path",
+            repo_path,
+            "--test-cmd",
+            "pytest tests/test_validator.py",
+            "--test-passed",
+            "--json",
+        ],
+        env=cli_env,
+    )
+    assert res_reval.exit_code == 0, res_reval.output
+    reval_data = json.loads(res_reval.output)
+    assert reval_data["status"] == "VERIFIED"
+    assert reval_data["confidence_score"] == 0.95
+
 
 def test_cli_errors(temp_repo_env):
     """Test CLI error handling and structured error responses."""
@@ -429,6 +456,22 @@ def test_mcp_server_full_lifecycle(temp_repo_env):
     py_file.write_text("# mutated\n", encoding="utf-8")
     changes_stale = server.check_changes(repo_id=repo_id)
     assert changes_stale["stale_count"] > 0
+
+    # 9. revalidate_memory
+    py_file.write_text(
+        "class TokenValidator:\n"
+        "    def verify_token(self, token: str) -> bool:\n"
+        "        return token == 'valid'\n",
+        encoding="utf-8",
+    )
+    reval_resp = server.revalidate_memory(
+        memory_id=mem3_id,
+        repo_id=repo_id,
+        test_command="pytest tests/test_validator.py",
+        test_passed=True,
+    )
+    assert reval_resp["status"] == "VERIFIED"
+    assert reval_resp["confidence_score"] == 0.95
 
 
 def test_mcp_server_errors_and_edge_cases(temp_repo_env):

@@ -386,6 +386,26 @@ This document tracks all meaningful architectural, technical, and implementation
      - Supports `--json` for machine-readable CI output and `--output <file>` for persisting benchmark reports.
 - **Tradeoffs & Consequences:** Provides judges and contributors with a single-command reproducibility check (`codemem eval`) that evaluates true memory infrastructure quality with 100% offline determinism.
 
+---
+
+### ADR-026: Explicit Memory Revalidation & Evidence Freshening (`revalidate`)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** PRD Workflow E & Section 9 specify that when memories are flagged as `STALE` due to underlying source code changes, agents must be able to explicitly revalidate them (`codemem revalidate <id>` / MCP `revalidate_memory`). Previously, stale facts could only be superseded via full revision updates (`codemem update`), missing the lightweight operational path where the code change is verified and the existing fact remains valid.
+- **Decision:**
+  1. **Core Service Method (`MemoryService.revalidate`):**
+     - Checks repository scope; raises `PermissionError` on scope violations.
+     - Inspects all anchored `EvidenceRecord` items against current file paths.
+     - Recomputes file SHA-256 hashes and verifies AST symbol integrity.
+     - If passing test results are provided (`test_passed=True`), upgrades status to `VERIFIED` with high confidence (0.95).
+     - If AST and file anchors are intact without tests, transitions to `OBSERVED` with 0.80 confidence.
+     - If file anchors are missing or AST symbols are broken, remains `STALE`.
+     - Atomically updates status in the graph store (`update_memory_status`) and persists refreshed evidence hashes.
+  2. **Transports:**
+     - CLI: Expose `codemem revalidate <id> [--test-cmd ...] [--test-passed] [--json]`.
+     - MCP: Expose tool `@mcp.tool(name="revalidate_memory")`.
+- **Tradeoffs & Consequences:** Closes PRD Workflow E and provides coding agents with an explicit, evidence-backed mechanism to verify and refresh cached memories without having to create redundant superseding versions.
+
 
 
 

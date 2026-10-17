@@ -443,3 +443,69 @@ class MemoryService:
             changed_files=sorted(list(changed_files_set)),
             revalidation_recommendations=recommendations,
         )
+
+    def revalidate(
+        self,
+        memory_id: str,
+        repo_id: str,
+        test_command: Optional[str] = None,
+        test_passed: Optional[bool] = None,
+    ) -> MemoryRecord:
+        """
+        Revalidate a STALE or OBSERVED memory against current codebase state.
+        Verifies file existence, recomputes content SHA-256, verifies AST symbols,
+        and optionally records verified test results.
+        """
+        mem = self.store.get_memory(memory_id, repo_id=repo_id)
+        if mem is None:
+            raw_mem = self.store.get_memory(memory_id, repo_id=None)
+            if raw_mem is not None and raw_mem.repository_id != repo_id:
+                raise PermissionError(f"Scope violation: memory '{memory_id}' belongs to repository '{raw_mem.repository_id}', not '{repo_id}'")
+            raise ValueError(f"Memory not found in repository {repo_id}: {memory_id}")
+
+        repo = self.store.get_repository(repo_id)
+        if repo is None:
+            raise ValueError(f"Repository not registered in graph: {repo_id}")
+
+        all_anchors_valid = True
+        has_anchors = bool(mem.evidence_records)
+        updated_evidence: List[EvidenceRecord] = []
+
+        for ev in mem.evidence_records:
+            full_path = os.path.join(repo.root_path, ev.file_path)
+            if not os.path.isfile(full_path):
+                all_anchors_valid = False
+                updated_evidence.append(ev)
+                continue
+
+            current_hash = GitAdapter.compute_file_sha256(full_path)
+            ev.content_hash = current_hash
+            ev.commit_hash = repo.head_commit
+
+            if ev.symbol:
+                symbol_valid = GitAdapter.verify_ast_symbol(full_path, ev.symbol)
+                if not symbol_valid:
+                    all_anchors_valid = False
+
+            if test_command:
+                ev.test_command = test_command
+                ev.test_passed = test_passed
+
+            updated_evidence.append(ev)
+
+        if test_command and test_passed is True and all_anchors_valid:
+            new_status = MemoryStatus.VERIFIED
+            mem.confidence_score = 0.95
+        elif all_anchors_valid and has_anchors:
+            new_status = MemoryStatus.OBSERVED
+            mem.confidence_score = max(mem.confidence_score, 0.80)
+        elif not all_anchors_valid:
+            new_status = MemoryStatus.STALE
+        else:
+            new_status = MemoryStatus.INFERRED
+
+        mem.status = new_status
+        mem.evidence_records = updated_evidence
+        self.store.update_memory_status(mem.id, new_status)
+        self.store.save_memory(mem, updated_evidence)
+        return mem

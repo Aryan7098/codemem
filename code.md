@@ -177,12 +177,12 @@ This document details how execution travels across files, functions, and modules
 | `tests/unit/test_falkordb_adapter.py` | Unit tests for FalkorDBAdapter with Cypher verification (7/7 passing) | Implemented & Verified |
 | `src/codemem/repository/git.py` | GitAdapter with 3-tier identity & AST inspection | Implemented (Step 5) |
 | `src/codemem/repository/__init__.py` | Repository package exports | Implemented (Step 5) |
-| `src/codemem/core/service.py` | Production MemoryService domain engine (deduplication, conflicts, scoping) | Implemented & Verified |
-| `tests/unit/test_service.py` | Unit tests for MemoryService (12/12 passing) | Implemented & Verified |
+| `src/codemem/core/service.py` | Production MemoryService domain engine (deduplication, conflicts, scoping, revalidate) | Implemented & Verified |
+| `tests/unit/test_service.py` | Unit tests for MemoryService (13/13 passing) | Implemented & Verified |
 | `src/codemem/cli/__init__.py` | CLI transport package initialization | Implemented (Owner B) |
-| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher, eval | Implemented & Enhanced |
+| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher, eval, revalidate | Implemented & Enhanced |
 | `src/codemem/mcp/__init__.py` | MCP transport package initialization | Implemented (Owner B) |
-| `src/codemem/mcp/server.py` | FastMCP/MCPServer 7 contract tools with 2-way state persistence | Implemented & Enhanced |
+| `src/codemem/mcp/server.py` | FastMCP/MCPServer 8 contract tools with 2-way state persistence | Implemented & Enhanced |
 | `tests/unit/test_cli_and_mcp.py` | Unit & integration tests for CLI and MCP (5/5 passing) | Implemented & Verified |
 | `examples/demo.py` | Multi-track reproducible demo script (CLI, MCP, Interoperability) | Implemented & Verified |
 | `src/codemem/evaluation/models.py` | Pydantic schemas for benchmark categories, metrics, comparative results | Implemented & Verified |
@@ -199,7 +199,7 @@ This document details how execution travels across files, functions, and modules
 ```
 1. CLI Invocation:
    cli/main.py :: cli() -> command handler:
-   - init, remember, recall, update, history, explain, check-changes, status, mcp, eval
+   - init, remember, recall, update, history, explain, check-changes, revalidate, status, mcp, eval
    Supports both --path and --repo argument flags for PRD compatibility.
 2. State Hydration:
    _get_state_file_path() resolves git root or CODEMEM_STORE_PATH -> .codemem/store.json
@@ -317,6 +317,28 @@ This document details how execution travels across files, functions, and modules
 4. Output Rendering:
    - CLI prints rich ANSI table of category metrics and comparative benchmarks
    - Supports --json for automated CI pipelines and --output <file> for report persistence
+```
+
+---
+
+### Flow K: Memory Revalidation (`codemem revalidate`)
+```
+1. Invocation:
+   CLI: cli/main.py :: revalidate_cmd(memory_id, path, test_cmd, test_passed)
+   MCP: mcp/server.py :: revalidate_memory(memory_id, repo_id, test_command, test_passed)
+
+2. Core Domain Execution (core/service.py :: MemoryService.revalidate):
+   - Verifies repository scope; prevents cross-repo tampering (raises SCOPE_VIOLATION).
+   - Inspects existing evidence files against filesystem.
+   - Recomputes file SHA-256 and checks AST symbol existence via GitAdapter.
+   - If test_passed=True and anchors intact: upgrades status to VERIFIED (confidence=0.95).
+   - If anchors intact without tests: transitions to OBSERVED (confidence=0.80).
+   - If file missing or AST symbol broken: remains STALE.
+
+3. Graph Synchronization:
+   - Updates memory status in store (update_memory_status)
+   - Persists refreshed evidence records and content hashes
+   - Flushes state to .codemem/store.json or commits Cypher update to FalkorDB
 ```
 
 

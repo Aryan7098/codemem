@@ -432,9 +432,60 @@ def test_persistence_across_restart(temp_repo):
     assert store2._contradicts_edges.get(v_conflict.id) == v_conflict.contradicts_id
 
     # Verify recall works on restored store
-    recall_resp = service2.recall(query="Ed25519 tokens", repo_id=repo_info.repository_id)
+    recall_resp = service2.recall(repo_id=repo_info.repository_id, query="Ed25519 tokens")
     assert recall_resp.abstained is False
     assert len(recall_resp.results) > 0
     assert recall_resp.results[0].memory.id == v2.id
+
+
+def test_revalidate_memory_lifecycle(temp_repo):
+    """Verify STALE memory revalidation updates hashes, status, and test execution."""
+    repo_path, auth_file = temp_repo
+    store = InMemoryGraphStore()
+    service = MemoryService(store=store)
+    repo = service.register_repository(repo_path)
+    repo_id = repo.repository_id
+
+    # 1. Store memory
+    mem = service.remember(
+        MemoryInput(
+            repository_id=repo_id,
+            claim="TokenValidator checks token valid",
+            evidence=[
+                EvidenceInput(
+                    file_path="src/auth/jwt.py",
+                    symbol="TokenValidator.verify_token",
+                )
+            ],
+        )
+    )
+    assert mem.status == MemoryStatus.OBSERVED
+    original_hash = mem.evidence_records[0].content_hash
+    assert original_hash is not None
+
+    # 2. Mutate code file and run change check -> flags STALE
+    with open(auth_file, "a", encoding="utf-8") as f:
+        f.write("# comment added\n")
+
+    report = service.check_changes(repo_id)
+    assert report.stale_count == 1
+    stale_mem = store.get_memory(mem.id, repo_id=repo_id)
+    assert stale_mem.status == MemoryStatus.STALE
+
+    # 3. Explicitly revalidate memory with passing test
+    reval = service.revalidate(
+        memory_id=mem.id,
+        repo_id=repo_id,
+        test_command="pytest tests/test_auth.py",
+        test_passed=True,
+    )
+    assert reval.status == MemoryStatus.VERIFIED
+    assert reval.confidence_score == 0.95
+    assert reval.evidence_records[0].content_hash != original_hash
+    assert reval.evidence_records[0].test_passed is True
+
+    # 4. Scope violation check: revalidate with foreign repo
+    with pytest.raises(PermissionError):
+        service.revalidate(memory_id=mem.id, repo_id="foreign-repo-404")
 
 

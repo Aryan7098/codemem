@@ -434,6 +434,51 @@ def check_changes_cmd(path: str, repo_id: Optional[str], as_json: bool) -> None:
         _emit_error("REPO_NOT_FOUND", str(exc), as_json=as_json)
 
 
+@cli.command("revalidate")
+@click.argument("memory_id")
+@click.option("--path", "--repo", "path", default=".", help="Repository path.")
+@click.option("--repo-id", default=None, help="Explicit repository_id override.")
+@click.option("--test-cmd", default=None, help="Optional test command that verified the fact.")
+@click.option("--test-passed", is_flag=True, default=False, help="Whether the test execution passed.")
+@click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
+def revalidate_cmd(
+    memory_id: str,
+    path: str,
+    repo_id: Optional[str],
+    test_cmd: Optional[str],
+    test_passed: bool,
+    as_json: bool,
+) -> None:
+    """Revalidate a stale or observed memory against current code state."""
+    try:
+        service, repo, state_file = get_service_and_repo(path)
+        target_repo_id = repo_id or repo.repository_id
+        revalidated = service.revalidate(
+            memory_id=memory_id,
+            repo_id=target_repo_id,
+            test_command=test_cmd,
+            test_passed=test_passed if test_cmd else None,
+        )
+        if isinstance(service.store, InMemoryGraphStore):
+            save_persistent_store(service.store, state_file)
+
+        if as_json:
+            click.echo(revalidated.model_dump_json(indent=2))
+            return
+
+        click.secho(f"Memory revalidated: {revalidated.id}", fg="green", bold=True)
+        click.echo(f"  Claim : {revalidated.claim}")
+        click.echo(f"  Status: {revalidated.status.value} (Confidence: {revalidated.confidence_score})")
+        for ev in revalidated.evidence_records:
+            click.echo(f"  Evidence: {ev.file_path} (sha256={ev.content_hash or 'N/A'}, test_passed={ev.test_passed})")
+    except PermissionError as exc:
+        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
+    except ValueError as exc:
+        _emit_error("MEMORY_NOT_FOUND", str(exc), as_json=as_json)
+    except Exception as exc:
+        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
+
+
 @cli.command("status")
 @click.option("--path", "--repo", "path", default=".", help="Repository path.")
 @click.option("--repo-id", default=None, help="Explicit repository_id override.")
