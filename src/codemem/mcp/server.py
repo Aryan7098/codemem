@@ -24,6 +24,7 @@ from codemem.core.models import (
     MemoryType,
 )
 from codemem.core.service import MemoryService
+from codemem.graph.factory import create_graph_store
 from codemem.graph.in_memory import InMemoryGraphStore
 
 
@@ -43,7 +44,9 @@ class CodeMemMCPServer:
         if service is not None:
             self.service = service
         else:
-            store = load_persistent_store(self._state_file)
+            store = create_graph_store()
+            if isinstance(store, InMemoryGraphStore):
+                store = load_persistent_store(self._state_file)
             self.service = MemoryService(store=store)
 
         self.mcp = FastMCP("codemem")

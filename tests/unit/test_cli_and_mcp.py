@@ -599,3 +599,67 @@ def test_semantic_vector_search_without_lexical_overlap(tmp_path: Path) -> None:
     assert "db.idx.vector.queryNodes('Memory', 'embedding'" in cypher
     assert params["repo_id"] == repo.repository_id
 
+
+def test_falkordb_backend_switching_via_env(tmp_path: Path, monkeypatch) -> None:
+    """Verify CODEMEM_BACKEND=falkordb switches both factory, CLI, and MCP to FalkorDBGraphStore."""
+    from codemem.graph import factory
+    from codemem.graph.falkordb_store import FalkorDBGraphStore
+
+    # Verify env resolution
+    monkeypatch.setenv("CODEMEM_BACKEND", "falkordb")
+    assert factory.get_backend_name() == "falkordb"
+
+    # When no FalkorDB container is running on an unused port, it raises DATABASE_UNAVAILABLE
+    monkeypatch.setenv("FALKORDB_PORT", "63999")
+    try:
+        FalkorDBGraphStore()
+        assert False, "Expected RuntimeError when FalkorDB container is unreachable"
+    except RuntimeError as exc:
+        assert "DATABASE_UNAVAILABLE" in str(exc)
+
+
+def test_falkordb_store_with_mock_client():
+    """Verify FalkorDBGraphStore Cypher node and edge generation using mock client."""
+    from unittest.mock import MagicMock
+    from codemem.graph.falkordb_store import FalkorDBGraphStore
+    from codemem.core.models import RepositoryInfo, MemoryRecord, EvidenceRecord, MemoryType, MemoryStatus
+
+    mock_graph = MagicMock()
+    mock_res = MagicMock()
+    mock_res.result_set = []
+    mock_graph.query.return_value = mock_res
+    mock_client = MagicMock()
+    mock_client.select_graph.return_value = mock_graph
+
+    store = FalkorDBGraphStore(client=mock_client)
+    assert mock_graph.query.called
+
+    repo = RepositoryInfo(
+        repository_id="repo-mock",
+        root_path="/mock/path",
+        head_commit="abc1234",
+        remote_url="https://github.com/example/repo",
+        git_available=True,
+    )
+    store.upsert_repository(repo)
+    cypher_calls = [c[0][0] for c in mock_graph.query.call_args_list]
+    assert any("MERGE (r:Repository" in c for c in cypher_calls)
+
+    mem = MemoryRecord(
+        repository_id="repo-mock",
+        claim="FalkorDB stores graph nodes",
+        memory_type=MemoryType.ARCHITECTURE,
+        status=MemoryStatus.VERIFIED,
+        tags=["database", "falkordb"],
+    )
+    ev = EvidenceRecord(
+        repository_id="repo-mock",
+        file_path="src/codemem/graph/falkordb_store.py",
+    )
+    store.save_memory(mem, [ev])
+    cypher_calls_after = [c[0][0] for c in mock_graph.query.call_args_list]
+    assert any("MERGE (m:Memory" in c for c in cypher_calls_after)
+    assert any("MERGE (e:Evidence" in c for c in cypher_calls_after)
+    assert any("MERGE (c:Concept" in c for c in cypher_calls_after)
+
+

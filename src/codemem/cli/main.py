@@ -23,6 +23,7 @@ from codemem.core.models import (
     RepositoryInfo,
 )
 from codemem.core.service import MemoryService
+from codemem.graph.factory import create_graph_store, get_backend_name
 from codemem.graph.in_memory import InMemoryGraphStore
 
 
@@ -90,8 +91,14 @@ def save_persistent_store(store: InMemoryGraphStore, state_file: Path) -> None:
 
 
 def get_service_and_repo(path: str = ".") -> Tuple[MemoryService, RepositoryInfo, Path]:
-    """Initialize MemoryService backed by persistent store and ensure repo is registered."""
+    """Initialize MemoryService using CODEMEM_BACKEND ('falkordb' or persistent 'memory')."""
     state_file = _get_state_file_path(path)
+    if get_backend_name() == "falkordb":
+        store = create_graph_store("falkordb")
+        service = MemoryService(store=store)
+        repo = service.register_repository(path)
+        return service, repo, state_file
+
     store = load_persistent_store(state_file)
     service = MemoryService(store=store)
     repo = service.register_repository(path)
@@ -142,6 +149,8 @@ def _parse_evidence_specs(
 
 def _emit_error(error_code: str, message: str, as_json: bool = False) -> None:
     """Emit structured CodeMemErrorDetail and exit with non-zero code."""
+    if "DATABASE_UNAVAILABLE" in message:
+        error_code = "DATABASE_UNAVAILABLE"
     err = CodeMemErrorDetail(error_code=error_code, message=message)
     if as_json:
         click.echo(err.model_dump_json(indent=2), err=True)
