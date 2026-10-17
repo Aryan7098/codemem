@@ -60,6 +60,9 @@ def load_persistent_store(state_file: Path) -> InMemoryGraphStore:
 
         for new_id, edge_val in data.get("supersedes_edges", {}).items():
             store._supersedes_edges[new_id] = tuple(edge_val)  # type: ignore[assignment]
+
+        for src_id, tgt_id in data.get("contradicts_edges", {}).items():
+            store._contradicts_edges[src_id] = tgt_id
     except Exception:
         return InMemoryGraphStore()
 
@@ -73,6 +76,7 @@ def save_persistent_store(store: InMemoryGraphStore, state_file: Path) -> None:
         "repositories": [r.model_dump(mode="json") for r in store._repositories.values()],
         "memories": [m.model_dump(mode="json") for m in store._memories.values()],
         "supersedes_edges": {k: list(v) for k, v in store._supersedes_edges.items()},
+        "contradicts_edges": dict(getattr(store, "_contradicts_edges", {})),
     }
     state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -336,6 +340,8 @@ def update_cmd(
             click.secho(f"Memory updated: {updated.id} supersedes {memory_id}", fg="green", bold=True)
             click.echo(f"  New Claim: {updated.claim}")
             click.echo(f"  Status   : {updated.status.value}")
+    except PermissionError as exc:
+        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
     except ValueError as exc:
         _emit_error("MEMORY_NOT_FOUND", str(exc), as_json=as_json)
     except Exception as exc:
@@ -362,6 +368,8 @@ def history_cmd(identifier: str, path: str, repo_id: Optional[str], as_json: boo
         for v in hist.versions:
             sup_info = f" -> supersedes {v.supersedes_id}" if v.supersedes_id else ""
             click.echo(f"  - {v.id} [{v.status.value}] ({v.recorded_at}){sup_info}: {v.claim}")
+    except PermissionError as exc:
+        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
     except ValueError as exc:
         _emit_error("FACT_NOT_FOUND", str(exc), as_json=as_json)
 
@@ -392,6 +400,8 @@ def explain_cmd(memory_id: str, path: str, repo_id: Optional[str], as_json: bool
             click.secho(f"  Changed Files   : {', '.join(explanation.changed_evidence_files)}", fg="yellow")
         for ev in explanation.evidence_records:
             click.echo(f"  Evidence [{ev.id}]: {ev.file_path} (symbol={ev.symbol or 'N/A'}, sha256={ev.content_hash or 'N/A'})")
+    except PermissionError as exc:
+        _emit_error("SCOPE_VIOLATION", str(exc), as_json=as_json)
     except ValueError as exc:
         _emit_error("MEMORY_NOT_FOUND", str(exc), as_json=as_json)
 

@@ -104,6 +104,53 @@ class MemoryService:
             computed_status = MemoryStatus.INFERRED
             confidence = min(memory_input.confidence_score, 0.65)
 
+        # Idempotency & Deduplication Check (Workflow B / P0)
+        existing_memories = self.store.get_all_memories(memory_input.repository_id, include_superseded=False)
+        norm_incoming = self._normalize_claim(memory_input.claim)
+
+        duplicate_candidate: Optional[MemoryRecord] = None
+        conflict_candidate: Optional[MemoryRecord] = None
+
+        for em in existing_memories:
+            # Check 1: Exact normalized claim match
+            if self._normalize_claim(em.claim) == norm_incoming:
+                duplicate_candidate = em
+                break
+
+            # Check 2: Exact subject + predicate + object match
+            if (
+                memory_input.subject
+                and memory_input.predicate
+                and em.subject
+                and em.predicate
+                and em.subject.strip().lower() == memory_input.subject.strip().lower()
+                and em.predicate.strip().lower() == memory_input.predicate.strip().lower()
+            ):
+                if (em.object or "").strip().lower() == (memory_input.object or "").strip().lower():
+                    duplicate_candidate = em
+                    break
+                else:
+                    # Same subject and predicate, but conflicting object claim
+                    conflict_candidate = em
+
+        if duplicate_candidate is not None:
+            # Idempotent write: update evidence if new evidence was supplied
+            if evidence_records:
+                existing_hashes = {ev.content_hash for ev in duplicate_candidate.evidence_records if ev.content_hash}
+                new_ev_to_add = [ev for ev in evidence_records if not ev.content_hash or ev.content_hash not in existing_hashes]
+                if new_ev_to_add:
+                    combined_ev = duplicate_candidate.evidence_records + new_ev_to_add
+                    duplicate_candidate.evidence_records = combined_ev
+                    self.store.save_memory(duplicate_candidate, combined_ev)
+
+            # If incoming fact has higher verification status, upgrade it
+            if computed_status == MemoryStatus.VERIFIED and duplicate_candidate.status != MemoryStatus.VERIFIED:
+                duplicate_candidate.status = MemoryStatus.VERIFIED
+                duplicate_candidate.confidence_score = max(duplicate_candidate.confidence_score, confidence)
+                self.store.update_memory_status(duplicate_candidate.id, MemoryStatus.VERIFIED)
+
+            return duplicate_candidate
+
         memory_record = MemoryRecord(
             repository_id=memory_input.repository_id,
             workspace_id=memory_input.workspace_id,
@@ -117,6 +164,7 @@ class MemoryService:
             source_agent_id=memory_input.source_agent_id,
             source_session_id=memory_input.source_session_id,
             source_commit=repo.head_commit,
+            contradicts_id=conflict_candidate.id if conflict_candidate else None,
             valid_from=memory_input.valid_from,
             valid_to=memory_input.valid_to,
             tags=memory_input.tags,
@@ -124,6 +172,12 @@ class MemoryService:
         )
 
         return self.store.save_memory(memory_record, evidence_records)
+
+    @staticmethod
+    def _normalize_claim(text: str) -> str:
+        """Normalize claim by lowercasing, stripping punctuation, and collapsing whitespace."""
+        clean = re.sub(r"[^\w\s]", "", text.lower())
+        return " ".join(clean.split())
 
     def recall(
         self,
@@ -242,6 +296,9 @@ class MemoryService:
         """
         old_mem = self.store.get_memory(memory_id, repo_id=repo_id)
         if old_mem is None:
+            raw_mem = self.store.get_memory(memory_id, repo_id=None)
+            if raw_mem is not None and raw_mem.repository_id != repo_id:
+                raise PermissionError(f"Scope violation: memory '{memory_id}' belongs to repository '{raw_mem.repository_id}', not '{repo_id}'")
             raise ValueError(f"Memory not found in repository {repo_id}: {memory_id}")
 
         evidence_records: List[EvidenceRecord] = []
@@ -291,6 +348,9 @@ class MemoryService:
 
         versions = self.store.get_memories_by_logical_fact(logical_fact_id, repo_id)
         if not versions:
+            raw_mem = self.store.get_memory(identifier, repo_id=None)
+            if raw_mem is not None and raw_mem.repository_id != repo_id:
+                raise PermissionError(f"Scope violation: memory '{identifier}' belongs to repository '{raw_mem.repository_id}', not '{repo_id}'")
             raise ValueError(f"No history found for identifier: {identifier}")
 
         current_ver = next((v.id for v in versions if v.status != MemoryStatus.SUPERSEDED), versions[0].id)
@@ -307,6 +367,9 @@ class MemoryService:
         """Provide detailed provenance, source agent, timestamps, and evidence trail."""
         mem = self.store.get_memory(memory_id, repo_id=repo_id)
         if mem is None:
+            raw_mem = self.store.get_memory(memory_id, repo_id=None)
+            if raw_mem is not None and raw_mem.repository_id != repo_id:
+                raise PermissionError(f"Scope violation: memory '{memory_id}' belongs to repository '{raw_mem.repository_id}', not '{repo_id}'")
             raise ValueError(f"Memory not found: {memory_id}")
 
         repo = self.store.get_repository(repo_id)

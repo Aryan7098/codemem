@@ -175,6 +175,12 @@ class CodeMemMCPServer:
             )
             self._flush_store()
             return record.model_dump(mode="json")
+        except PermissionError as exc:
+            return CodeMemErrorDetail(
+                error_code="SCOPE_VIOLATION",
+                message=str(exc),
+                details={"memory_id": memory_id, "repo_id": repo_id},
+            ).model_dump(mode="json")
         except ValueError as exc:
             raw_mem = self.service.store.get_memory(memory_id, repo_id=None)
             code = "SCOPE_VIOLATION" if (raw_mem is not None and raw_mem.repository_id != repo_id) else "MEMORY_NOT_FOUND"
@@ -189,9 +195,17 @@ class CodeMemMCPServer:
         try:
             resp = self.service.history(identifier=identifier, repo_id=repo_id)
             return resp.model_dump(mode="json")
-        except ValueError as exc:
+        except PermissionError as exc:
             return CodeMemErrorDetail(
-                error_code="FACT_NOT_FOUND",
+                error_code="SCOPE_VIOLATION",
+                message=str(exc),
+                details={"identifier": identifier, "repo_id": repo_id},
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            raw_mem = self.service.store.get_memory(identifier, repo_id=None)
+            code = "SCOPE_VIOLATION" if (raw_mem is not None and raw_mem.repository_id != repo_id) else "FACT_NOT_FOUND"
+            return CodeMemErrorDetail(
+                error_code=code,
                 message=str(exc),
                 details={"identifier": identifier, "repo_id": repo_id},
             ).model_dump(mode="json")
@@ -201,6 +215,12 @@ class CodeMemMCPServer:
         try:
             resp = self.service.explain(memory_id=memory_id, repo_id=repo_id)
             return resp.model_dump(mode="json")
+        except PermissionError as exc:
+            return CodeMemErrorDetail(
+                error_code="SCOPE_VIOLATION",
+                message=str(exc),
+                details={"memory_id": memory_id, "repo_id": repo_id},
+            ).model_dump(mode="json")
         except ValueError as exc:
             raw_mem = self.service.store.get_memory(memory_id, repo_id=None)
             code = "SCOPE_VIOLATION" if (raw_mem is not None and raw_mem.repository_id != repo_id) else "MEMORY_NOT_FOUND"

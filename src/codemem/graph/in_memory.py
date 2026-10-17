@@ -26,6 +26,8 @@ class InMemoryGraphStore:
         self._memory_to_evidence: Dict[str, Set[str]] = {}
         # (:Memory)-[:SUPERSEDES]->(:Memory)  new_id -> (old_id, reason, timestamp)
         self._supersedes_edges: Dict[str, Tuple[str, str, str]] = {}
+        # (:Memory)-[:CONTRADICTS]->(:Memory)  source_id -> target_id
+        self._contradicts_edges: Dict[str, str] = {}
         # (:Concept)-[:RELATES_TO]->(:Concept)
         self._concept_aliases: Dict[str, Set[str]] = {
             "login": {"auth", "authentication", "token", "jwt", "session"},
@@ -61,6 +63,10 @@ class InMemoryGraphStore:
         for ev in evidence_records:
             self._evidence[ev.id] = ev
             self._memory_to_evidence[memory.id].add(ev.id)
+
+        # Record conflict edge if present
+        if memory.contradicts_id:
+            self._contradicts_edges[memory.id] = memory.contradicts_id
 
         # Index tags/concepts
         for tag in memory.tags:
@@ -230,10 +236,12 @@ class InMemoryGraphStore:
             self._evidence.clear()
             self._memory_to_evidence.clear()
             self._supersedes_edges.clear()
+            self._contradicts_edges.clear()
             self._concept_to_memories.clear()
         else:
             to_del = [mid for mid, m in self._memories.items() if m.repository_id == repo_id]
             for mid in to_del:
                 del self._memories[mid]
                 self._memory_to_evidence.pop(mid, None)
+                self._contradicts_edges.pop(mid, None)
             self._repositories.pop(repo_id, None)

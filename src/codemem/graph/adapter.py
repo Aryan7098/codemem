@@ -86,6 +86,7 @@ def _row_to_memory_record(
         source_commit=mem_props.get("source_commit"),
         supersedes_id=mem_props.get("supersedes_id"),
         superseded_by_id=mem_props.get("superseded_by_id"),
+        contradicts_id=mem_props.get("contradicts_id"),
         recorded_at=mem_props.get("recorded_at", datetime.now(timezone.utc).isoformat()),
         evidence_records=ev_records,
     )
@@ -256,6 +257,7 @@ class FalkorDBAdapter:
             m.source_commit = $source_commit,
             m.supersedes_id = $supersedes_id,
             m.superseded_by_id = $superseded_by_id,
+            m.contradicts_id = $contradicts_id,
             m.recorded_at = $recorded_at
         WITH m
         MATCH (r:Repository {id: $repository_id})
@@ -284,6 +286,7 @@ class FalkorDBAdapter:
             "source_commit": memory.source_commit,
             "supersedes_id": memory.supersedes_id,
             "superseded_by_id": memory.superseded_by_id,
+            "contradicts_id": memory.contradicts_id,
             "recorded_at": memory.recorded_at,
         }
         self.query(mem_cypher, mem_params)

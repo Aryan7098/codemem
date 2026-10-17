@@ -309,6 +309,58 @@ This document tracks all meaningful architectural, technical, and implementation
   5. Schema index initialization: Create indices on `Memory(memory_id)`, `Memory(logical_fact_id)`, `Repository(repository_id)`, and `Evidence(file_path)` upon connection.
 - **Tradeoffs & Consequences:** Enables high-performance native graph traversals and live Docker FalkorDB persistence without breaking offline unit testing or introducing Docker hard dependencies into CI suites.
 
+---
+
+### ADR-022: Idempotent Deduplication, Evidence Merging, and Contradiction Tracking
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** PRD Milestone 2 and Workflow B require the memory engine to reject duplicate fact submissions gracefully and detect semantic conflicts without creating duplicate graph nodes. Agents frequently repeat observations across sessions or submit contradictory claims (e.g. changing authentication strategies).
+- **Decision:**
+  1. **Normalized Claim & SPO Matching:** In `MemoryService.remember()`, normalize claims (case folding, punctuation stripping, whitespace normalization). Detect duplicates via:
+     - Exact normalized claim equivalence.
+     - Exact `subject` + `predicate` + `object` equivalence.
+  2. **Idempotent Merge & Verification Promotion:** When a duplicate claim is detected:
+     - Return the existing `MemoryRecord` without creating duplicate graph nodes.
+     - If new evidence anchors are provided, merge them non-destructively by content hash.
+     - If the incoming submission contains verified test results (`test_passed=True`), upgrade status from `INFERRED`/`OBSERVED` to `VERIFIED`.
+  3. **Contradiction Detection (`contradicts_id`):**
+     - When an incoming claim matches an existing record's `subject` + `predicate` but has a conflicting `object`, mark `contradicts_id` linking the new memory to the existing one.
+     - In `FalkorDBAdapter`, establish native `(:Memory)-[:CONTRADICTS]->(:Memory)` graph edge.
+     - In `InMemoryGraphStore`, track `_contradicts_edges` and persist across restarts.
+- **Tradeoffs & Consequences:** Prevents graph bloat from repeated agent observations while making contradictory claims discoverable in provenance graphs without silent overwrites.
+
+---
+
+### ADR-023: Strict Multi-Repository Scope Isolation & Scope Violation Protection
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** PRD Section 6 & 13 enforce multi-repository scoping. In multi-agent environments, agents operating on Repo B must never view, mutate, supersede, or query history for memories belonging to Repo A. Cross-repo scope violations must be contained and reported with standardized error codes.
+- **Decision:**
+  1. **Core Service Level Enforcement:** In `MemoryService` (`update`, `history`, `explain`), inspect `store.get_memory(..., repo_id=None)` if the memory is absent within the requested scope. If the memory exists under a different `repository_id`, raise `PermissionError("Scope violation: memory belongs to...")`.
+  2. **Graph Store Partitioning:**
+     - In `FalkorDBAdapter`, all query patterns (`MATCH (m:Memory {repository_id: $repo_id})`) strictly parameterize by repository ID.
+     - In `InMemoryGraphStore`, all lookups, concept traversals, and file reference queries strictly filter by `repository_id`.
+  3. **Transport Error Mapping (`SCOPE_VIOLATION`):**
+     - CLI commands (`update`, `history`, `explain`) catch `PermissionError` and emit `SCOPE_VIOLATION` with exit code 1.
+     - MCP tools catch `PermissionError` and return `CodeMemErrorDetail(error_code="SCOPE_VIOLATION", ...)`.
+- **Tradeoffs & Consequences:** Guarantees zero cross-repository data leaks and provides strict security boundaries across shared team environments and multi-repo agent workflows.
+
+---
+
+### ADR-024: Cross-Process Persistence Architecture Across Restarts
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** To satisfy the "Persistence Across Restart" criterion across both production and offline evaluation environments:
+  1. In production, FalkorDB runs as a containerized service with Docker volume mounts (`codemem_falkordb_data` -> `/data`).
+  2. In local CLI and MCP development/testing without Docker, state must survive process termination and restarts across different shell sessions.
+- **Decision:**
+  1. Implement complete JSON-backed graph serialization in `src/codemem/cli/main.py` (`.codemem/store.json`):
+     - Serializes all `RepositoryInfo`, `MemoryRecord` (including embedded `EvidenceRecord` list), `supersedes_edges`, and `contradicts_edges`.
+     - Automatically hydrates on command invocation and flushes state on all mutating operations (`init`, `remember`, `update`, `check_changes`).
+  2. In `CodeMemMCPServer`, automatically bind to `.codemem/store.json` using `_flush_store()` so CLI and MCP processes share identical persisted disk state.
+  3. Validate through unit and integration tests (`test_persistence_across_restart` and Track 1 of `examples/demo.py`) that dropping in-memory stores and re-instantiating fresh services from disk restores 100% of memories, supersedes chains, and contradictions.
+- **Tradeoffs & Consequences:** Enables reliable cross-restart persistence in all deployment modes (Docker FalkorDB or local offline JSON store) with zero test flakiness.
+
 
 
 

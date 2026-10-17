@@ -297,6 +297,39 @@ def test_cli_errors(temp_repo_env):
     assert res_exp_none.exit_code != 0
     assert "MEMORY_NOT_FOUND" in res_exp_none.output
 
+    # 5. Scope violation on CLI update, history, explain
+    rem_scoped = runner.invoke(
+        cli,
+        ["remember", "CLI scoped claim", "--path", repo_path, "--json"],
+        env=cli_env,
+    )
+    assert rem_scoped.exit_code == 0
+    scoped_id = json.loads(rem_scoped.output)["id"]
+
+    res_cli_scope_up = runner.invoke(
+        cli,
+        ["update", scoped_id, "Hacked claim", "--reason", "Scope test", "--path", repo_path, "--repo-id", "other-repo-id", "--json"],
+        env=cli_env,
+    )
+    assert res_cli_scope_up.exit_code != 0
+    assert "SCOPE_VIOLATION" in res_cli_scope_up.output
+
+    res_cli_scope_hist = runner.invoke(
+        cli,
+        ["history", scoped_id, "--path", repo_path, "--repo-id", "other-repo-id", "--json"],
+        env=cli_env,
+    )
+    assert res_cli_scope_hist.exit_code != 0
+    assert "SCOPE_VIOLATION" in res_cli_scope_hist.output
+
+    res_cli_scope_exp = runner.invoke(
+        cli,
+        ["explain", scoped_id, "--path", repo_path, "--repo-id", "other-repo-id", "--json"],
+        env=cli_env,
+    )
+    assert res_cli_scope_exp.exit_code != 0
+    assert "SCOPE_VIOLATION" in res_cli_scope_exp.output
+
 
 def test_mcp_server_full_lifecycle(temp_repo_env):
     """Test CodeMemMCPServer tool calls across full lifecycle."""
@@ -446,7 +479,7 @@ def test_mcp_server_errors_and_edge_cases(temp_repo_env):
     err_check = server.check_changes(repo_id="nonexistent-repo")
     assert err_check.get("error_code") == "REPO_NOT_FOUND"
 
-    # 9. Scope violation on update and explain
+    # 9. Scope violation on update, explain, and history
     mem = server.remember(repository_id=repo_id, claim="Scoped claim")
     mem_id = mem["id"]
     err_scope_up = server.update(
@@ -459,6 +492,9 @@ def test_mcp_server_errors_and_edge_cases(temp_repo_env):
 
     err_scope_exp = server.explain(memory_id=mem_id, repo_id="other-repo-id")
     assert err_scope_exp.get("error_code") == "SCOPE_VIOLATION"
+
+    err_scope_hist = server.history(identifier=mem_id, repo_id="other-repo-id")
+    assert err_scope_hist.get("error_code") == "SCOPE_VIOLATION"
 
 
 def test_create_mcp_server_factory():

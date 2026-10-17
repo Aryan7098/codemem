@@ -177,14 +177,14 @@ This document details how execution travels across files, functions, and modules
 | `tests/unit/test_falkordb_adapter.py` | Unit tests for FalkorDBAdapter with Cypher verification (7/7 passing) | Implemented & Verified |
 | `src/codemem/repository/git.py` | GitAdapter with 3-tier identity & AST inspection | Implemented (Step 5) |
 | `src/codemem/repository/__init__.py` | Repository package exports | Implemented (Step 5) |
-| `src/codemem/core/service.py` | Production MemoryService domain engine | Implemented (Step 5) |
-| `tests/unit/test_service.py` | Unit tests for MemoryService (7/7 passing) | Implemented & Verified (Step 5) |
+| `src/codemem/core/service.py` | Production MemoryService domain engine (deduplication, conflicts, scoping) | Implemented & Verified |
+| `tests/unit/test_service.py` | Unit tests for MemoryService (12/12 passing) | Implemented & Verified |
 | `src/codemem/cli/__init__.py` | CLI transport package initialization | Implemented (Owner B) |
-| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher | Implemented & Enhanced (Owner B) |
+| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher | Implemented & Enhanced |
 | `src/codemem/mcp/__init__.py` | MCP transport package initialization | Implemented (Owner B) |
-| `src/codemem/mcp/server.py` | FastMCP/MCPServer 7 contract tools with 2-way state persistence | Implemented & Enhanced (Owner B) |
-| `tests/unit/test_cli_and_mcp.py` | Unit & integration tests for CLI and MCP (5/5 passing) | Implemented & Verified (Owner B) |
-| `examples/demo.py` | Multi-track reproducible demo script (CLI, MCP, Interoperability) | Implemented & Verified (Owner B) |
+| `src/codemem/mcp/server.py` | FastMCP/MCPServer 7 contract tools with 2-way state persistence | Implemented & Enhanced |
+| `tests/unit/test_cli_and_mcp.py` | Unit & integration tests for CLI and MCP (5/5 passing) | Implemented & Verified |
+| `examples/demo.py` | Multi-track reproducible demo script (CLI, MCP, Interoperability) | Implemented & Verified |
 
 ---
 
@@ -198,14 +198,14 @@ This document details how execution travels across files, functions, and modules
    Supports both --path and --repo argument flags for PRD compatibility.
 2. State Hydration:
    _get_state_file_path() resolves git root or CODEMEM_STORE_PATH -> .codemem/store.json
-   load_persistent_store() reads JSON and populates InMemoryGraphStore (repositories, memories, edges)
+   load_persistent_store() reads JSON and populates InMemoryGraphStore (repositories, memories, supersedes_edges, contradicts_edges)
 3. Domain Execution:
    Dispatches to MemoryService methods
 4. State Flush:
    Mutating commands invoke save_persistent_store() writing updated graph state to disk
 5. Output Formatting:
    Emits formatted human-readable output or machine-readable JSON (--json)
-   Errors routed to _emit_error() producing structured CodeMemErrorDetail
+   Errors routed to _emit_error() producing structured CodeMemErrorDetail (e.g. SCOPE_VIOLATION)
 ```
 
 ### Flow G: MCP Server Transport (`CodeMemMCPServer`)
@@ -246,6 +246,7 @@ This document details how execution travels across files, functions, and modules
    - Creates :Evidence nodes for each evidence reference and links (:Memory)-[:SUPPORTED_BY]->(:Evidence)
    - Creates :Concept nodes and links (:Memory)-[:RELATES_TO]->(:Concept) and (:Memory)-[:TAGGED_WITH]->(:Concept)
    - Optionally attaches :Agent and :Session provenance nodes
+   - If contradicts_id is set: MATCH (other:Memory {memory_id: $contradicts_id}) MERGE (m)-[:CONTRADICTS]->(other)
 
 3. Cypher Supersession (supersede_memory):
    - Updates old memory: SET old.status = 'SUPERSEDED'
@@ -258,6 +259,32 @@ This document details how execution travels across files, functions, and modules
      MATCH (start:Concept)-[:RELATES_TO*0..2]-(c:Concept)<-[:RELATES_TO]-(m:Memory)-[:ABOUT_REPO]->(r:Repository)
      WHERE start.name IN $concepts AND r.repository_id = $repo_id
      RETURN DISTINCT m
+```
+
+---
+
+### Flow I: Deduplication, Conflict Detection & Scope Violation Protection
+```
+1. Deduplication & Idempotent Merge:
+   core/service.py :: MemoryService.remember()
+   - Normalizes incoming claim text (case folding, punctuation stripping, whitespace normalization).
+   - Searches existing memories in the repository scope for exact normalized claim match or exact SPO match.
+   - If match found:
+     - Returns existing MemoryRecord without creating duplicate nodes.
+     - Merges any newly passed EvidenceRecord items by content SHA-256 hash.
+     - If newly anchored with test_passed=True, upgrades status to VERIFIED.
+
+2. Semantic Conflict Linking:
+   - When incoming claim has same subject and predicate but conflicting object:
+     - Links new MemoryRecord to the existing record via contradicts_id.
+     - Creates (:Memory)-[:CONTRADICTS]->(:Memory) edge in graph.
+
+3. Strict Repository Scoping & Scope Violation Containment:
+   - In MemoryService (update, history, explain):
+     - If memory does not exist under the provided repo_id, queries graph across all scopes.
+     - If memory belongs to another repository, raises PermissionError("Scope violation: ...").
+     - CLI catches PermissionError -> emits SCOPE_VIOLATION structured JSON error with exit code 1.
+     - MCP server catches PermissionError -> returns CodeMemErrorDetail(error_code="SCOPE_VIOLATION").
 ```
 
 
