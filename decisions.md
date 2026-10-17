@@ -447,6 +447,18 @@ This document tracks all meaningful architectural, technical, and implementation
      - Verify concurrent deduplication and status upgrading under identical concurrent submissions.
 - **Tradeoffs & Consequences:** Negligible synchronization overhead (<0.01ms per operation) while providing rock-solid stability for multi-agent teams executing across parallel worker threads.
 
+---
+
+### ADR-029: Hybrid Semantic Vector Search & FalkorDB Vector Index Specification
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** Lexical search and 2-hop concept graph traversal excel at exact keyword and explicit relation queries, but fail when a query uses zero overlapping surface words (e.g., "Where do we check credentials?" vs "TokenValidator verifies bearer tokens"). P1 mandates semantic vector search with FalkorDB vector index integration while maintaining zero external API key requirements.
+- **Decision:**
+  1. Implement `EmbeddingProvider` protocol and `DeterministicEmbeddingProvider` in `src/codemem/core/embeddings.py` producing normalized 64-dimensional vectors. Latent semantic cluster activations (auth, validation, storage, api, cache) map synonym concepts to shared dimensions without external network calls.
+  2. Implement `FalkorDBVectorIndexSpec` generating FalkorDB Cypher DDL (`CREATE VECTOR INDEX FOR (m:Memory) ON (m.embedding)`) and parameterized vector queries (`CALL db.idx.vector.queryNodes('Memory', 'embedding', ...)`).
+  3. Extend `GraphStoreProtocol`, `InMemoryGraphStore`, and `FalkorDBAdapter` with `vector_search(...)` returning scored `(MemoryRecord, similarity)` tuples.
+  4. Augment `MemoryService.recall()` with Stage 1C (Semantic Vector Search) alongside Stage 1A (Lexical) and Stage 1B (2-hop Concept Graph), fusing lexical and vector similarities into a hybrid `match_score`.
+- **Tradeoffs & Consequences:** Provides robust zero-overlap semantic recall, keeps test runs 100% deterministic and offline, and aligns directly with FalkorDB native vector indexing.
 
 
 

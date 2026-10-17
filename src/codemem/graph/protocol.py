@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import List, Optional, Protocol, Tuple, runtime_checkable
 
 from codemem.core.models import (
     AgentHandoffRecord,
@@ -113,3 +113,14 @@ class GraphStoreProtocol(Protocol):
     def clear(self, repo_id: Optional[str] = None) -> None:
         """Clear graph data (for isolated test teardowns)."""
         ...
+
+    def vector_search(
+        self,
+        repo_id: str,
+        query_embedding: List[float],
+        include_stale: bool = False,
+        top_k: int = 5,
+    ) -> List[Tuple[MemoryRecord, float]]:
+        """Retrieve candidate memories ranked by vector similarity within repository scope."""
+        ...
+

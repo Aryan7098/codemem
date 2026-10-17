@@ -547,3 +547,55 @@ def test_create_mcp_server_factory():
     srv = create_mcp_server(service=service)
     assert isinstance(srv, CodeMemMCPServer)
     assert srv.service is service
+
+
+def test_semantic_vector_search_without_lexical_overlap(tmp_path: Path) -> None:
+    """
+    Verify P1 Semantic Vector Search:
+    Query 'Where do we check credentials?' retrieves 'TokenValidator verifies bearer tokens'
+    even with zero shared surface words and no explicit tags.
+    """
+    from codemem.core.embeddings import FalkorDBVectorIndexSpec
+    from codemem.core.models import EvidenceInput, MemoryInput
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "security.py").write_text(
+        "class TokenValidator:\n    def verify(self, token: str) -> bool:\n        return True\n",
+        encoding="utf-8",
+    )
+
+    service = MemoryService(store=InMemoryGraphStore())
+    repo = service.register_repository(str(tmp_path))
+
+    # Record claim with NO shared words with 'Where do we check credentials?' and NO tags
+    mem = service.remember(
+        MemoryInput(
+            repository_id=repo.repository_id,
+            claim="TokenValidator verifies bearer tokens",
+            evidence=[EvidenceInput(file_path="src/security.py", symbol="TokenValidator")],
+        )
+    )
+    assert mem.embedding is not None
+    assert len(mem.embedding) == 64
+
+    # Query using purely semantic phrasing
+    recall_resp = service.recall(
+        repo_id=repo.repository_id,
+        query="Where do we check credentials?",
+    )
+    assert recall_resp.abstained is False
+    assert len(recall_resp.results) >= 1
+    assert recall_resp.results[0].memory.id == mem.id
+
+    # Verify FalkorDB Vector Index Cypher generation
+    ddl = FalkorDBVectorIndexSpec.create_vector_index_cypher(dimension=64)
+    assert "CREATE VECTOR INDEX FOR (m:Memory) ON (m.embedding)" in ddl
+    cypher, params = FalkorDBVectorIndexSpec.vector_query_cypher(
+        repo_id=repo.repository_id,
+        query_embedding=mem.embedding,
+        top_k=5,
+    )
+    assert "db.idx.vector.queryNodes('Memory', 'embedding'" in cypher
+    assert params["repo_id"] == repo.repository_id
+

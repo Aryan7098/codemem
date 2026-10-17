@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional, Set
 
+from codemem.core.embeddings import DeterministicEmbeddingProvider, EmbeddingProvider
 from codemem.core.models import (
     AgentHandoffRecord,
     ChangeDetectionResponse,
@@ -31,9 +32,15 @@ from codemem.repository.git import GitAdapter
 class MemoryService:
     """Core memory engine managing validation, graph storage, evidence, and retrieval."""
 
-    def __init__(self, store: Optional[GraphStoreProtocol] = None, min_confidence_threshold: float = 0.45) -> None:
+    def __init__(
+        self,
+        store: Optional[GraphStoreProtocol] = None,
+        min_confidence_threshold: float = 0.45,
+        embedder: Optional[EmbeddingProvider] = None,
+    ) -> None:
         self.store: GraphStoreProtocol = store if store is not None else InMemoryGraphStore()
         self.min_confidence_threshold = min_confidence_threshold
+        self.embedder: EmbeddingProvider = embedder if embedder is not None else DeterministicEmbeddingProvider()
 
     def register_repository(self, path: str) -> RepositoryInfo:
         """Resolve repository identity via 3-tier policy and register scope in the graph."""
@@ -155,6 +162,20 @@ class MemoryService:
 
             return duplicate_candidate
 
+        embed_source = " ".join(
+            filter(
+                None,
+                [
+                    memory_input.claim,
+                    memory_input.subject,
+                    memory_input.predicate,
+                    memory_input.object,
+                    " ".join(memory_input.tags),
+                ],
+            )
+        )
+        embedding_vec = self.embedder.embed_text(embed_source)
+
         memory_record = MemoryRecord(
             repository_id=memory_input.repository_id,
             workspace_id=memory_input.workspace_id,
@@ -172,6 +193,7 @@ class MemoryService:
             valid_from=memory_input.valid_from,
             valid_to=memory_input.valid_to,
             tags=memory_input.tags,
+            embedding=embedding_vec,
             evidence_records=evidence_records,
         )
 
@@ -214,6 +236,22 @@ class MemoryService:
             if m.status != MemoryStatus.STALE or include_stale:
                 candidates_map[m.id] = m
 
+        # Stage 1C: Semantic vector search (P1 hybrid fallback)
+        semantic_scores: dict[str, float] = {}
+        if hasattr(self.store, "vector_search"):
+            query_embedding = self.embedder.embed_text(query)
+            vector_hits = self.store.vector_search(
+                repo_id=repo_id,
+                query_embedding=query_embedding,
+                include_stale=include_stale,
+                top_k=top_k * 2,
+            )
+            for m, sim_score in vector_hits:
+                # Only admit pure vector candidates if similarity is meaningful (>= 0.55)
+                if sim_score >= 0.55:
+                    candidates_map[m.id] = m
+                    semantic_scores[m.id] = sim_score
+
         candidates = list(candidates_map.values())
 
         if not candidates:
@@ -228,10 +266,20 @@ class MemoryService:
 
         scored_records: List[ScoredMemoryRecord] = []
         for mem in candidates:
-            # 1. Match score (text & tag overlap)
+            # 1. Hybrid Match score (Lexical/Tag overlap + Semantic Vector similarity)
             content_text = f"{mem.claim} {mem.subject or ''} {mem.predicate or ''} {mem.object or ''} {' '.join(mem.tags)}".lower()
             overlap_count = sum(1 for t in terms if t in content_text)
-            match_score = min(1.0, 0.4 + (0.2 * overlap_count)) if overlap_count > 0 else 0.5
+            lexical_score = min(1.0, 0.4 + (0.2 * overlap_count)) if overlap_count > 0 else 0.0
+            sem_score = semantic_scores.get(mem.id, 0.0)
+            if lexical_score > 0.0:
+                if overlap_count >= 2:
+                    match_score = min(1.0, max(lexical_score, round(0.8 * lexical_score + 0.2 * sem_score, 3)))
+                else:
+                    match_score = lexical_score
+            elif sem_score > 0.0:
+                match_score = round(sem_score, 3)
+            else:
+                match_score = 0.5  # Concept graph traversal hit without direct term overlap
 
             # 2. Status weight
             if mem.status == MemoryStatus.VERIFIED:
@@ -265,7 +313,7 @@ class MemoryService:
                 )
             )
 
-        scored_records.sort(key=lambda x: x.final_score, reverse=True)
+        scored_records.sort(key=lambda x: (x.final_score, x.match_score), reverse=True)
 
         # Abstention gate (PRD LongMemEval requirement)
         if not scored_records or scored_records[0].final_score < self.min_confidence_threshold:

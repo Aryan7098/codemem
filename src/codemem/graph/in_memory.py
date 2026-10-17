@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
+from codemem.core.embeddings import cosine_similarity
 from codemem.core.models import (
     AgentHandoffRecord,
     EvidenceRecord,
@@ -299,3 +300,36 @@ class InMemoryGraphStore:
                 for hid in to_del_h:
                     del self._handoffs[hid]
                 self._repositories.pop(repo_id, None)
+
+    def vector_search(
+        self,
+        repo_id: str,
+        query_embedding: List[float],
+        include_stale: bool = False,
+        top_k: int = 5,
+    ) -> List[Tuple[MemoryRecord, float]]:
+        """
+        Retrieve active memories within repo_id using cosine similarity over embeddings.
+        Mirrors FalkorDB `CALL db.idx.vector.queryNodes('Memory', 'embedding', ...)`.
+        """
+        if not query_embedding:
+            return []
+
+        with self._lock:
+            scored: List[Tuple[MemoryRecord, float]] = []
+            for m in list(self._memories.values()):
+                if m.repository_id != repo_id:
+                    continue
+                if m.status in (MemoryStatus.SUPERSEDED, MemoryStatus.CONTRADICTED):
+                    continue
+                if m.status == MemoryStatus.STALE and not include_stale:
+                    continue
+                if not m.embedding:
+                    continue
+
+                sim = cosine_similarity(query_embedding, m.embedding)
+                if sim > 0.0:
+                    scored.append((m, round(sim, 4)))
+
+            scored.sort(key=lambda item: (item[1], item[0].recorded_at), reverse=True)
+            return scored[:top_k]

@@ -145,6 +145,7 @@ class MemoryRecord(BaseModel):
     superseded_by_id: Optional[str] = None
     contradicts_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    embedding: Optional[List[float]] = None
     evidence_records: List[EvidenceRecord] = Field(default_factory=list)
 
 

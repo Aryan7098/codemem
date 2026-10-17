@@ -694,3 +694,46 @@ class FalkorDBAdapter:
                 """,
                 {"repo_id": repo_id},
             )
+
+    def vector_search(
+        self,
+        repo_id: str,
+        query_embedding: List[float],
+        include_stale: bool = False,
+        top_k: int = 5,
+    ) -> List[Tuple[MemoryRecord, float]]:
+        """Retrieve candidate memories ranked by vector similarity within repository scope."""
+        if not query_embedding:
+            return []
+        from codemem.core.embeddings import FalkorDBVectorIndexSpec, cosine_similarity
+        cypher, params = FalkorDBVectorIndexSpec.vector_query_cypher(
+            repo_id=repo_id,
+            query_embedding=query_embedding,
+            top_k=top_k,
+            include_stale=include_stale,
+        )
+        try:
+            res = self.query(cypher, params)
+            if not res or not res.result_set:
+                return []
+            results: List[Tuple[MemoryRecord, float]] = []
+            for row in res.result_set:
+                mem_props = _extract_node_props(row[0])
+                sim = float(row[1]) if len(row) > 1 and row[1] is not None else 0.0
+                results.append((_row_to_memory_record(mem_props, []), round(sim, 4)))
+            return results
+        except Exception:
+            all_mems = self.get_all_memories(repo_id=repo_id)
+            scored: List[Tuple[MemoryRecord, float]] = []
+            for m in all_mems:
+                if m.status in (MemoryStatus.SUPERSEDED, MemoryStatus.CONTRADICTED):
+                    continue
+                if m.status == MemoryStatus.STALE and not include_stale:
+                    continue
+                if not m.embedding:
+                    continue
+                sim = cosine_similarity(query_embedding, m.embedding)
+                if sim > 0.0:
+                    scored.append((m, round(sim, 4)))
+            scored.sort(key=lambda item: (item[1], item[0].recorded_at), reverse=True)
+            return scored[:top_k]

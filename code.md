@@ -167,6 +167,7 @@ This document details how execution travels across files, functions, and modules
 | `docs/memory-schema.md` | Graph schema, nodes, edges & status state machine | Implemented (Step 2) |
 | `docs/api-contract.md` | Service methods, request/response models & error codes | Implemented (Step 2) |
 | `src/codemem/core/models.py` | Pydantic data schemas & boundary validators | Implemented (Step 3) |
+| `src/codemem/core/embeddings.py` | EmbeddingProvider, DeterministicEmbeddingProvider, FalkorDBVectorIndexSpec | Implemented (P1 Hybrid) |
 | `src/codemem/core/__init__.py` | Core model exports | Implemented (Step 3) |
 | `tests/unit/test_models.py` | Unit test suite for models (6/6 passing) | Implemented & Verified (Step 3) |
 | `src/codemem/graph/protocol.py` | GraphStoreProtocol interface | Implemented (Step 4) |
