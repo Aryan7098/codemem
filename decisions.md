@@ -226,6 +226,19 @@ This document tracks all meaningful architectural, technical, and implementation
      - Implements `check_changes`: verifies current file hashes against recorded evidence and transitions affected memories to `STALE`.
 - **Tradeoffs & Consequences:** All 7 core API methods are operational and covered by automated unit tests (19/19 passing). The teammate can import `MemoryService(store=InMemoryGraphStore())` and build MCP/CLI transports immediately.
 
+---
+
+### ADR-016: Remote Repository Synchronization & Milestone 1 Delivery
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** Milestone 1 core deliverables (schemas, contracts, in-memory graph store, Git adapter, and core service) are complete and tested. The teammate (Owner B) needs immediate access to start parallel development on CLI and MCP tools.
+- **Decision:**
+  1. Initialize Git repository with default branch `main`.
+  2. Synchronize to public GitHub remote `https://github.com/Aryan7098/codemem.git`.
+  3. Ensure `.gitignore` cleanly prevents environment files, virtual environment binaries, cache, and test output from leaking into remote history.
+- **Tradeoffs & Consequences:** Provides an immutable, shared base commit for both contributors, enabling branch-based pull requests and reproducible clone testing.
+
+
 
 
 
