@@ -238,6 +238,80 @@ This document tracks all meaningful architectural, technical, and implementation
   3. Ensure `.gitignore` cleanly prevents environment files, virtual environment binaries, cache, and test output from leaking into remote history.
 - **Tradeoffs & Consequences:** Provides an immutable, shared base commit for both contributors, enabling branch-based pull requests and reproducible clone testing.
 
+---
+
+### ADR-017: Multi-Version MCP Compatibility (FastMCP v1 and MCPServer v2)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** Owner B implemented the MCP transport server using `mcp` SDK. In `mcp` 2.x, `FastMCP` was migrated to `mcp.server.mcpserver.MCPServer`, while `mcp` 1.x exports `mcp.server.fastmcp.FastMCP`. Since `pyproject.toml` pins `mcp>=1.0.0`, environments may resolve either 1.x or 2.x.
+- **Decision:**
+  1. Use resilient import fallback:
+     ```python
+     try:
+         from mcp.server.fastmcp import FastMCP
+     except ImportError:
+         from mcp.server.mcpserver import MCPServer as FastMCP
+     ```
+  2. Maintain identical `@mcp.tool(name=...)` decorator registration and method bindings for all 7 contract methods (`register_repository`, `remember`, `recall`, `update`, `history`, `explain`, `check_changes`).
+- **Tradeoffs & Consequences:** Guarantees forward and backward compatibility across different virtual environment installations of the MCP SDK without breaking the public interface or tool decorator behavior.
+
+---
+
+### ADR-018: CLI State Persistence via Local JSON Storage (`.codemem/store.json`)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** CLI commands execute as separate, short-lived process invocations. While `FalkorDBAdapter` connects to an external persistent database daemon, development and offline workflows run on `InMemoryGraphStore`. Without persistence, memories stored via `codemem remember` would be lost before `codemem recall` or `codemem update` could be called.
+- **Decision:**
+  1. Implement transparent file-backed serialization in `src/codemem/cli/main.py` targeting `.codemem/store.json` (or customizable via `CODEMEM_STORE_PATH` env var).
+  2. Store serialized repository nodes, memory records, evidence records, and supersedes edge graphs between CLI invocations.
+  3. Automatically hydrate and commit store mutations on state-altering commands (`init`, `remember`, `update`, `check-changes`).
+- **Tradeoffs & Consequences:** Allows full multi-command CLI workflows and automated test assertions against `InMemoryGraphStore` without requiring an active Redis/FalkorDB container running in background.
+
+---
+
+### ADR-019: CLI and MCP Error Contract & Structured Output Mapping (`CodeMemErrorDetail`)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** In accordance with `docs/api-contract.md`, both CLI and MCP transports must return machine-readable structured error models matching exact error codes (`REPO_NOT_FOUND`, `SCOPE_VIOLATION`, `MEMORY_NOT_FOUND`, `FACT_NOT_FOUND`, `INVALID_EVIDENCE_PATH`, `INVALID_QUERY`, `INVALID_DIRECTORY`).
+- **Decision:**
+  1. In MCP tools (`src/codemem/mcp/server.py`), catch exceptions and return `CodeMemErrorDetail(...).model_dump(mode="json")`.
+  2. In CLI commands (`src/codemem/cli/main.py`), format error outputs via `_emit_error` with optional `--json` support emitting `CodeMemErrorDetail` to stderr and exiting with status code 1.
+- **Tradeoffs & Consequences:** Transports remain thin adapters strictly observing the error code specification from `api-contract.md`, ensuring identical error handling across human CLI and AI agent MCP tool interactions.
+
+---
+
+### ADR-020: Unified Cross-Transport Persistence & Reproducible Multi-Agent Demo
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** To ensure judge reproducibility across both CLI and external MCP coding assistants without data gaps:
+  1. If `CodeMemMCPServer` only ran with an ephemeral in-process store, memories recorded via CLI would be invisible to MCP agents, and vice versa.
+  2. Multi-session reasoning and handoffs must run across true OS process boundaries to guarantee that memory is not merely passing through global RAM state.
+- **Decision:**
+  1. Bind `CodeMemMCPServer` to the identical persistent state mechanism (`_get_state_file_path`), automatically flushing mutations to `.codemem/store.json` on `register_repository`, `remember`, `update`, and `check_changes`.
+  2. Implement `codemem status` for real-time memory metrics and breakdown by verification status.
+  3. Implement `codemem mcp` CLI launcher command for one-command stdio server launch by judges and coding agents.
+  4. Implement `examples/demo.py` supporting `--mode all`, `--mode cli`, `--mode mcp`, and `--mode interop`, explicitly verifying cross-session handoff thinking, non-destructive supersession, and conservative abstention.
+- **Tradeoffs & Consequences:** Guarantees 100% interoperability between CLI and MCP transports with zero memory divergence, fully reproducible on any judge's machine with or without Docker.
+
+---
+
+### ADR-021: Production FalkorDBAdapter Implementation (Cypher Query Engine)
+- **Date:** 2026-10-17
+- **Status:** Accepted
+- **Context:** PRD Sections 1, 6, 13, and 18 establish FalkorDB as the authoritative primary graph database for persistent agent memory, relationships, and multi-hop queries. While `InMemoryGraphStore` enabled early contract verification and offline testing, the system requires a production-grade `FalkorDBAdapter` implementing `GraphStoreProtocol` using parameterized openCypher queries over the official `falkordb` Python driver.
+- **Decision:**
+  1. Implement `FalkorDBAdapter` in `src/codemem/graph/adapter.py` satisfying `GraphStoreProtocol`:
+     - Nodes: `:Repository`, `:Memory`, `:Evidence`, `:Concept`, `:Agent`, `:Session`.
+     - Relationships: `(:Memory)-[:ABOUT_REPO]->(:Repository)`, `(:Memory)-[:SUPPORTED_BY]->(:Evidence)`, `(:Memory)-[:SUPERSEDES]->(:Memory)`, `(:Memory)-[:RELATES_TO]->(:Concept)`, `(:Memory)-[:TAGGED_WITH]->(:Concept)`.
+  2. Implement parameterized openCypher queries across all protocol methods (`upsert_repository`, `save_memory`, `get_memory`, `get_memories_by_logical_fact`, `supersede_memory`, `query_memories_by_terms`, `traverse_concept_graph`, `get_memories_referencing_file`, `update_memory_status`, `clear`, `health_check`).
+  3. Bounded graph traversal: Use Cypher bounded variable-length paths (`MATCH (start:Concept)-[:RELATES_TO*0..2]-(c:Concept)<-[:RELATES_TO]-(m:Memory)`) for concept expansion within depth limits.
+  4. Resilient connection architecture: Support `lazy_connect=True` and dependency-injected `graph_client` for zero-friction mock unit testing and graceful fallback when Redis/FalkorDB is offline.
+  5. Schema index initialization: Create indices on `Memory(memory_id)`, `Memory(logical_fact_id)`, `Repository(repository_id)`, and `Evidence(file_path)` upon connection.
+- **Tradeoffs & Consequences:** Enables high-performance native graph traversals and live Docker FalkorDB persistence without breaking offline unit testing or introducing Docker hard dependencies into CI suites.
+
+
+
+
 
 
 

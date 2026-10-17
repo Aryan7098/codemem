@@ -1,6 +1,7 @@
 """Graph storage layer for CodeMem memory engine."""
 
+from codemem.graph.adapter import FalkorDBAdapter
 from codemem.graph.in_memory import InMemoryGraphStore
 from codemem.graph.protocol import GraphStoreProtocol
 
-__all__ = ["GraphStoreProtocol", "InMemoryGraphStore"]
+__all__ = ["FalkorDBAdapter", "GraphStoreProtocol", "InMemoryGraphStore"]
