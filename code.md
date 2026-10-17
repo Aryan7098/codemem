@@ -156,7 +156,7 @@ This document details how execution travels across files, functions, and modules
 | File Path | Responsibility | Status |
 |-----------|----------------|--------|
 | `PRD.md` | Requirements specification | Frozen specification |
-| `decisions.md` | ADRs and architectural rationale | Active & Updated (ADR-001 to ADR-015) |
+| `decisions.md` | ADRs and architectural rationale | Active & Updated (ADR-001 to ADR-020) |
 | `code.md` | Call graphs, execution paths, file roles | Active & Updated |
 | `.gitignore` | Ignore cache, venv, secrets, FalkorDB data | Implemented (Step 1) |
 | `docker-compose.yml` | Containerized FalkorDB + persistent volume + healthcheck | Implemented (Step 1) |
@@ -171,10 +171,95 @@ This document details how execution travels across files, functions, and modules
 | `tests/unit/test_models.py` | Unit test suite for models (6/6 passing) | Implemented & Verified (Step 3) |
 | `src/codemem/graph/protocol.py` | GraphStoreProtocol interface | Implemented (Step 4) |
 | `src/codemem/graph/in_memory.py` | InMemoryGraphStore with bounded concept traversal | Implemented (Step 4) |
-| `src/codemem/graph/__init__.py` | Graph package exports | Implemented (Step 4) |
-| `tests/unit/test_in_memory_graph.py` | Unit tests for graph store (6/6 passing) | Implemented & Verified (Step 4) |
+| `src/codemem/graph/adapter.py` | Production FalkorDB Cypher adapter implementing GraphStoreProtocol | Implemented & Verified |
+| `src/codemem/graph/__init__.py` | Graph package exports (InMemoryGraphStore, FalkorDBAdapter, GraphStoreProtocol) | Implemented & Updated |
+| `tests/unit/test_in_memory_graph.py` | Unit tests for in-memory graph store (6/6 passing) | Implemented & Verified (Step 4) |
+| `tests/unit/test_falkordb_adapter.py` | Unit tests for FalkorDBAdapter with Cypher verification (7/7 passing) | Implemented & Verified |
 | `src/codemem/repository/git.py` | GitAdapter with 3-tier identity & AST inspection | Implemented (Step 5) |
 | `src/codemem/repository/__init__.py` | Repository package exports | Implemented (Step 5) |
 | `src/codemem/core/service.py` | Production MemoryService domain engine | Implemented (Step 5) |
 | `tests/unit/test_service.py` | Unit tests for MemoryService (7/7 passing) | Implemented & Verified (Step 5) |
+| `src/codemem/cli/__init__.py` | CLI transport package initialization | Implemented (Owner B) |
+| `src/codemem/cli/main.py` | Click CLI entrypoint with JSON persistence, status, mcp launcher | Implemented & Enhanced (Owner B) |
+| `src/codemem/mcp/__init__.py` | MCP transport package initialization | Implemented (Owner B) |
+| `src/codemem/mcp/server.py` | FastMCP/MCPServer 7 contract tools with 2-way state persistence | Implemented & Enhanced (Owner B) |
+| `tests/unit/test_cli_and_mcp.py` | Unit & integration tests for CLI and MCP (5/5 passing) | Implemented & Verified (Owner B) |
+| `examples/demo.py` | Multi-track reproducible demo script (CLI, MCP, Interoperability) | Implemented & Verified (Owner B) |
+
+---
+
+## 4. Transport Execution Flows & State Persistence (Owner B)
+
+### Flow F: CLI Execution & Persistence (`codemem <command>`)
+```
+1. CLI Invocation:
+   cli/main.py :: cli() -> command handler:
+   - init, remember, recall, update, history, explain, check-changes, status, mcp
+   Supports both --path and --repo argument flags for PRD compatibility.
+2. State Hydration:
+   _get_state_file_path() resolves git root or CODEMEM_STORE_PATH -> .codemem/store.json
+   load_persistent_store() reads JSON and populates InMemoryGraphStore (repositories, memories, edges)
+3. Domain Execution:
+   Dispatches to MemoryService methods
+4. State Flush:
+   Mutating commands invoke save_persistent_store() writing updated graph state to disk
+5. Output Formatting:
+   Emits formatted human-readable output or machine-readable JSON (--json)
+   Errors routed to _emit_error() producing structured CodeMemErrorDetail
+```
+
+### Flow G: MCP Server Transport (`CodeMemMCPServer`)
+```
+1. Server Initialization:
+   mcp/server.py :: CodeMemMCPServer binds to the persistent store file (.codemem/store.json)
+   Binds all 7 API contract methods as MCP tools:
+   - register_repository, remember, recall, update, history, explain, check_changes
+   Can be launched directly via `codemem mcp` or `python -m codemem.mcp.server`.
+2. Tool Execution:
+   Parses tool arguments -> executes MemoryService -> flushes changes to store -> returns JSON
+3. Cross-Transport Synchrony:
+   Facts written by CLI are immediately queryable via MCP tools;
+   facts updated via MCP tools are instantly visible to CLI commands.
+4. Structured Error Containment:
+   Catches exceptions and maps to CodeMemErrorDetail with specific error codes:
+   REPO_NOT_FOUND, SCOPE_VIOLATION, MEMORY_NOT_FOUND, FACT_NOT_FOUND,
+   INVALID_EVIDENCE_PATH, INVALID_QUERY, INVALID_DIRECTORY
+```
+
+---
+
+### Flow H: FalkorDB Cypher Storage & Query Execution
+```
+1. Driver Connection & Schema Indexing:
+   graph/adapter.py :: FalkorDBAdapter(host, port, graph_name, lazy_connect=True)
+   - Binds to FalkorDB via Redis protocol (`redis://host:port`)
+   - Checks health via health_check() -> PING / Cypher RETURN 1
+   - Creates property indices:
+     CREATE INDEX FOR (m:Memory) ON (m.memory_id)
+     CREATE INDEX FOR (m:Memory) ON (m.logical_fact_id)
+     CREATE INDEX FOR (r:Repository) ON (r.repository_id)
+     CREATE INDEX FOR (e:Evidence) ON (e.file_path)
+
+2. Cypher Mutating Ingestion (save_memory):
+   - Merges :Repository {repository_id: $repo_id}
+   - Creates :Memory node with serialized JSON metadata, status, subject, predicate, object, confidence
+   - Creates :Evidence nodes for each evidence reference and links (:Memory)-[:SUPPORTED_BY]->(:Evidence)
+   - Creates :Concept nodes and links (:Memory)-[:RELATES_TO]->(:Concept) and (:Memory)-[:TAGGED_WITH]->(:Concept)
+   - Optionally attaches :Agent and :Session provenance nodes
+
+3. Cypher Supersession (supersede_memory):
+   - Updates old memory: SET old.status = 'SUPERSEDED'
+   - Saves new memory: SET new.status = $status
+   - Links: CREATE (new)-[:SUPERSEDES]->(old)
+   - Full history intact for get_memories_by_logical_fact() ordered by created_at ASC
+
+4. Cypher Bounded Concept Graph Traversal (traverse_concept_graph):
+   - Queries bounded multi-hop paths:
+     MATCH (start:Concept)-[:RELATES_TO*0..2]-(c:Concept)<-[:RELATES_TO]-(m:Memory)-[:ABOUT_REPO]->(r:Repository)
+     WHERE start.name IN $concepts AND r.repository_id = $repo_id
+     RETURN DISTINCT m
+```
+
+
+
 
