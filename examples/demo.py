@@ -347,15 +347,103 @@ def run_interoperability_demo(repo_dir: Path) -> None:
 
 
 # ==============================================================================
+# TRACK 4: LIVE REPOSITORY MULTI-AGENT SCANNING & COORDINATION
+# ==============================================================================
+def run_real_repo_demo(repo_dir: Path) -> None:
+    print("\n" + "=" * 75)
+    print(f"  LIVE REPOSITORY MULTI-AGENT COORDINATION: {repo_dir.name}")
+    print(f"  Path: {repo_dir.resolve()}")
+    print("=" * 75)
+    print("  * Multi-agent execution directly on real repository source files.")
+    print("  * Agents extract AST symbols, coordinate handoffs, and persist shared state.\n")
+
+    # Step 1: Architect / Scanner Agent
+    print("[Session 1 - Architect Agent] Scanning codebase and bootstrapping memory graph...")
+    res_scan = _run_cli_cmd(["scan", "--repo", str(repo_dir)], cwd=repo_dir)
+    assert res_scan.returncode == 0, res_scan.stderr
+    print("  " + "\n  ".join(res_scan.stdout.strip().splitlines()[:5]))
+    print("  [Process Exited] Session 1 terminated. Zero RAM shared.\n")
+
+    # Step 2: Backend Dev Agent
+    print("[Session 2 - Backend Dev Agent] Recalls architecture and records task handoff...")
+    res_recall = _run_cli_cmd(["recall", "core service architecture models", "--repo", str(repo_dir), "--json"], cwd=repo_dir)
+    assert res_recall.returncode == 0, res_recall.stderr
+    rec_data = json.loads(res_recall.stdout)
+    if not rec_data.get("abstained") and rec_data.get("results"):
+        top = rec_data["results"][0]["memory"]
+        print(f"  [+] Recalled Memory    : [{top['status']}] {top['claim'][:70]}...")
+    
+    # Record structured handoff
+    res_handoff = _run_cli_cmd(
+        [
+            "handoff", "record",
+            "--objective", "Security Review: Validate MCP tool error containment and input sanitization",
+            "--completed", "Implemented Core MemoryService and FastMCP transport layer",
+            "--from", "Backend-Developer",
+            "--to", "Security-Auditor",
+            "-r", "Verify that invalid JSON payload returns safe CodeMemErrorDetail without crash",
+            "--repo", str(repo_dir),
+            "--json",
+        ],
+        cwd=repo_dir,
+    )
+    assert res_handoff.returncode == 0, res_handoff.stderr
+    handoff_obj = json.loads(res_handoff.stdout)
+    handoff_id = handoff_obj.get("handoff_id") or handoff_obj.get("id")
+    print(f"  [+] Created Agent Handoff: {handoff_id}")
+    print(f"  [+] From / To           : {handoff_obj.get('originating_agent_id')} -> {handoff_obj.get('receiving_agent_id')}")
+    print(f"  [+] Task Objective      : {handoff_obj['task_objective'][:65]}...")
+    print("  [Process Exited] Session 2 terminated. Zero RAM shared.\n")
+
+    # Step 3: Security Auditor Agent
+    print("[Session 3 - Security Auditor Agent] Wakes up, discovers open handoffs, and completes audit...")
+    res_list = _run_cli_cmd(["handoff", "list", "--repo", str(repo_dir), "--status", "PENDING", "--json"], cwd=repo_dir)
+    assert res_list.returncode == 0, res_list.stderr
+    pending_list = json.loads(res_list.stdout)
+    print(f"  [+] Pending Handoffs Found: {len(pending_list)}")
+    
+    # Complete handoff
+    res_done = _run_cli_cmd(
+        [
+            "handoff", "complete",
+            handoff_id,
+            "--agent", "Security-Auditor",
+            "--repo", str(repo_dir),
+            "--json",
+        ],
+        cwd=repo_dir,
+    )
+    assert res_done.returncode == 0, res_done.stderr
+    print(f"  [+] Completed Handoff    : {handoff_id} -> COMPLETED")
+    print("  [Process Exited] Session 3 terminated. Zero RAM shared.\n")
+
+    # Step 4: Auditor & Status Agent
+    print("[Session 4 - Graph Inspector Agent] Repository Graph Summary:")
+    res_status = _run_cli_cmd(["status", "--repo", str(repo_dir)], cwd=repo_dir)
+    print("  " + "\n  ".join(res_status.stdout.strip().splitlines()))
+
+
+# ==============================================================================
 # MAIN ENTRYPOINT
 # ==============================================================================
 def main() -> None:
     parser = argparse.ArgumentParser(description="CodeMem Multi-Agent Cross-Session & MCP Demo")
     parser.add_argument(
+        "--repo",
+        type=str,
+        default=None,
+        help="Path to an existing repository to run multi-agent coordination on (default: run on current repo or sandbox)",
+    )
+    parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        help="Force execution inside an isolated temporary sandbox with sample JWT code mutation",
+    )
+    parser.add_argument(
         "--mode",
         choices=["all", "cli", "mcp", "interop"],
         default="all",
-        help="Demo mode to execute (default: all)",
+        help="Demo mode to execute when running in sandbox (default: all)",
     )
     args = parser.parse_args()
 
@@ -364,18 +452,24 @@ def main() -> None:
     print("  Local-First Shared Memory for Coding Agents (FalkorDB / WeMakeDevs Track 2)")
     print("#" * 75)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        repo_dir = Path(tmp_dir)
-        source_file = _create_sample_repository(repo_dir)
+    # If --repo is explicitly provided or --sandbox is NOT specified, run on the actual repository!
+    target_repo = Path(args.repo) if args.repo else (None if args.sandbox else Path.cwd())
 
-        if args.mode in ("all", "cli"):
-            run_cli_demo(repo_dir, source_file)
+    if target_repo and target_repo.exists() and not args.sandbox:
+        run_real_repo_demo(target_repo)
+    else:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_dir = Path(tmp_dir)
+            source_file = _create_sample_repository(repo_dir)
 
-        if args.mode in ("all", "mcp"):
-            run_mcp_demo(repo_dir)
+            if args.mode in ("all", "cli"):
+                run_cli_demo(repo_dir, source_file)
 
-        if args.mode in ("all", "interop"):
-            run_interoperability_demo(repo_dir)
+            if args.mode in ("all", "mcp"):
+                run_mcp_demo(repo_dir)
+
+            if args.mode in ("all", "interop"):
+                run_interoperability_demo(repo_dir)
 
     print("\n" + "#" * 75)
     print("  DEMO SUITE COMPLETE: All multi-session, MCP, and CLI capabilities verified!")
