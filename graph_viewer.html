@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CodeMem Knowledge Graph Visualizer</title>
+  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at 50% 30%, #0d1527 0%, #030712 100%);
+      color: #f8fafc;
+      font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+    
+    /* Top Bar */
+    #topbar {
+      height: 64px;
+      padding: 0 28px;
+      background: rgba(13, 21, 39, 0.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #0284c7, #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: white;
+      box-shadow: 0 0 20px rgba(2, 132, 199, 0.4);
+    }
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+    }
+    .brand-sub {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .stats-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .chip {
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #cbd5e1;
+    }
+    .chip.status {
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.3);
+      color: #4ade80;
+    }
+
+    /* Main Canvas */
+    #network {
+      width: 100vw;
+      height: 100vh;
+      padding-top: 64px;
+    }
+
+    /* Modern Slide-in Inspection Panel */
+    #drawer {
+      position: absolute;
+      top: 80px;
+      right: 24px;
+      width: 380px;
+      max-height: calc(100vh - 120px);
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+      padding: 22px;
+      z-index: 30;
+      display: none;
+      overflow-y: auto;
+      transition: all 0.2s ease-out;
+    }
+    #drawer.active {
+      display: block;
+      animation: slideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .drawer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .drawer-tag {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 6px;
+      letter-spacing: 0.05em;
+    }
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 1.2rem;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .close-btn:hover {
+      color: white;
+      background: rgba(255,255,255,0.1);
+    }
+    .prop-row {
+      margin-bottom: 12px;
+    }
+    .prop-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #64748b;
+      margin-bottom: 3px;
+      font-weight: 700;
+    }
+    .prop-val {
+      font-size: 0.88rem;
+      color: #e2e8f0;
+      word-break: break-word;
+      line-height: 1.4;
+    }
+    .prop-val.code {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: #38bdf8;
+    }
+
+    /* Legend Box */
+    .legend {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(14px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 16px 20px;
+      font-size: 0.8rem;
+      z-index: 20;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+    .legend-title {
+      font-weight: 800;
+      color: #94a3b8;
+      text-transform: uppercase;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      margin-bottom: 10px;
+    }
+    .legend-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #cbd5e1;
+    }
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 4px;
+    }
+
+    /* Instructions Pill */
+    .hints {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 8px 16px;
+      border-radius: 24px;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <div class="brand">
+      <div class="brand-logo">C</div>
+      <div>
+        <div class="brand-title">CodeMem Graph Explorer</div>
+        <div class="brand-sub">FalkorDB Property Graph Representation</div>
+      </div>
+    </div>
+    <div class="stats-row">
+      <div class="chip status">● FalkorDB Schema Validated</div>
+      <div class="chip">Nodes: <b>63</b></div>
+      <div class="chip">Relationships: <b>62</b></div>
+    </div>
+  </div>
+
+  <div id="network"></div>
+
+  <!-- Click Drawer -->
+  <div id="drawer">
+    <div class="drawer-header">
+      <span id="drawer-badge" class="drawer-tag">Node</span>
+      <button class="close-btn" onclick="closeDrawer()">✕</button>
+    </div>
+    <div id="drawer-content"></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-title">Graph Node Schema</div>
+    <div class="legend-grid">
+      <div class="legend-item"><div class="legend-dot" style="background:#0284c7;"></div> :Repository Root</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#15803d;"></div> :Memory [OBSERVED]</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#7e22ce;"></div> :Memory [INFERRED]</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#854d0e;"></div> :CodeAnchor (Source AST)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#c2410c;"></div> :AgentHandoff</div>
+    </div>
+  </div>
+
+  <div class="hints">
+    🖱️ Click any node to open properties inspector | Scroll to zoom
+  </div>
+
+  <script type="text/javascript">
+    const rawNodes = [{"id": "3447cb27b3a65c9a", "label": "\ud83d\udce6 Graph-Hacks", "group": "repository", "info": {"Type": "Repository Root Scope", "Repository ID": "3447cb27b3a65c9a", "Git HEAD": "2de22a1988", "Path": "C:\\Users\\azure\\Documents\\Projects\\Graph-Hacks"}}, {"id": "handoff_e1f90b55d734", "label": "\ud83e\udd1d Handoff\n[COMPLETED]\nSecurity Review: Validate MCP ...", "group": "handoff", "info": {"Type": "Agent Handoff Task", "Handoff ID": "handoff_e1f90b55d734", "Status": "COMPLETED", "From Agent": "Backend-Developer", "To Agent": "Security-Auditor", "Task Objective": "Security Review: Validate MCP tool error containment and input sanitization", "Completed Work": "Implemented Core MemoryService and FastMCP transport layer"}}, {"id": "handoff_a82fb6f707c1", "label": "\ud83e\udd1d Handoff\n[COMPLETED]\nSecurity Review: Validate MCP ...", "group": "handoff", "info": {"Type": "Agent Handoff Task", "Handoff ID": "handoff_a82fb6f707c1", "Status": "COMPLETED", "From Agent": "Backend-Developer", "To Agent": "Security-Auditor", "Task Objective": "Security Review: Validate MCP tool error containment and input sanitization", "Completed Work": "Implemented Core MemoryService and FastMCP transport layer"}}, {"id": "mem_71e028c54c45", "label": "\ud83e\udde0 codemem\nProject is named 'codemem' con...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_71e028c54c45", "Status": "OBSERVED", "Subject": "codemem", "Predicate": "configured-in", "Object": "pyproject.toml", "Confidence": "95%", "Full Claim": "Project is named 'codemem' configured in pyproject.toml"}}, {"id": "evi_d081047af363", "label": "\ud83d\udcc4 pyproject.toml", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "pyproject.toml", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "23f21003b04e..."}}, {"id": "mem_545462fcf2b1", "label": "\ud83e\udde0 dependencies\nProject depends on core packag...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_545462fcf2b1", "Status": "OBSERVED", "Subject": "dependencies", "Predicate": "requires", "Object": "pydantic, pydantic-settings, falkordb, redis, click, mcp", "Confidence": "95%", "Full Claim": "Project depends on core packages: pydantic, pydantic-settings, falkordb, redis, click, mcp"}}, {"id": "evi_48c176fa22b3", "label": "\ud83d\udcc4 pyproject.toml", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "pyproject.toml", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "23f21003b04e..."}}, {"id": "mem_473f6b40f6cb", "label": "\ud83e\udde0 test-suite\nProject maintains a pytest tes...", "group": "memory_inferred", "info": {"Type": "Memory [INFERRED]", "Memory ID": "mem_473f6b40f6cb", "Status": "INFERRED", "Subject": "test-suite", "Predicate": "located-in", "Object": "tests/", "Confidence": "65%", "Full Claim": "Project maintains a pytest test suite in tests/ containing 9 test modules (test_cli_and_mcp.py, test_concurrency.py, test_evaluation.py, test_falkordb_adapter.py, test_handoff.py)"}}, {"id": "evi_2a715dc86aa6", "label": "\ud83d\udcc4 tests", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "tests", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "Unset"}}, {"id": "evi_01740f608307", "label": "\ud83d\udcc4 tests", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "tests", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "Unset"}}, {"id": "evi_6d2b4a957970", "label": "\ud83d\udcc4 tests", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "tests", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "Unset"}}, {"id": "evi_6fa4e7797e92", "label": "\ud83d\udcc4 tests", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "tests", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "Unset"}}, {"id": "evi_f69bf689f36c", "label": "\ud83d\udcc4 tests", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "tests", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "Unset"}}, {"id": "mem_73c8092ffbf6", "label": "\ud83e\udde0 EmbeddingProvider\nEmbeddingProvider defines Prot...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_73c8092ffbf6", "Status": "OBSERVED", "Subject": "EmbeddingProvider", "Predicate": "defines", "Object": "src/codemem/core/embeddings.py", "Confidence": "85%", "Full Claim": "EmbeddingProvider defines Protocol for text embedding generators used in hybrid semantic retrieval."}}, {"id": "evi_bd0cac1ba7d8", "label": "\ud83d\udcc4 embeddings.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/embeddings.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "ba5d2cabd67f..."}}, {"id": "mem_4e682266bbb7", "label": "\ud83e\udde0 DeterministicEmbeddingProvider\nDeterministicEmbeddingProvider...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_4e682266bbb7", "Status": "OBSERVED", "Subject": "DeterministicEmbeddingProvider", "Predicate": "defines", "Object": "src/codemem/core/embeddings.py", "Confidence": "85%", "Full Claim": "DeterministicEmbeddingProvider defines Zero-dependency local embedding provider that projects text and domain semantic"}}, {"id": "evi_95a8af36c775", "label": "\ud83d\udcc4 embeddings.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/embeddings.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "ba5d2cabd67f..."}}, {"id": "mem_87b56a4fc90d", "label": "\ud83e\udde0 FalkorDBVectorIndexSpec\nFalkorDBVectorIndexSpec define...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_87b56a4fc90d", "Status": "OBSERVED", "Subject": "FalkorDBVectorIndexSpec", "Predicate": "defines", "Object": "src/codemem/core/embeddings.py", "Confidence": "85%", "Full Claim": "FalkorDBVectorIndexSpec defines Cypher DDL and query builders for FalkorDB `:Memory(embedding)` vector index."}}, {"id": "evi_a56ea836ea8b", "label": "\ud83d\udcc4 embeddings.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/embeddings.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "ba5d2cabd67f..."}}, {"id": "mem_80c43ca57553", "label": "\ud83e\udde0 MemoryStatus\nMemoryStatus defines Controlle...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_80c43ca57553", "Status": "OBSERVED", "Subject": "MemoryStatus", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryStatus defines Controlled lifecycle statuses for memory records."}}, {"id": "evi_72a2f996f85f", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_2c0c8d27a342", "label": "\ud83e\udde0 MemoryType\nMemoryType defines Categorical...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_2c0c8d27a342", "Status": "OBSERVED", "Subject": "MemoryType", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryType defines Categorical types of codebase knowledge."}}, {"id": "evi_817a665a61aa", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_50677de26e8f", "label": "\ud83e\udde0 EvidenceKind\nEvidenceKind defines Types of ...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_50677de26e8f", "Status": "OBSERVED", "Subject": "EvidenceKind", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "EvidenceKind defines Types of grounding evidence supporting a claim."}}, {"id": "evi_9a6d738fda08", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_3672b308ddbc", "label": "\ud83e\udde0 EvidenceInput\nEvidenceInput defines Input pa...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_3672b308ddbc", "Status": "OBSERVED", "Subject": "EvidenceInput", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "EvidenceInput defines Input payload for attaching evidence to a claim."}}, {"id": "evi_e7d6a10539d6", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_b5544c2b4f9b", "label": "\ud83e\udde0 EvidenceRecord\nEvidenceRecord defines Persist...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_b5544c2b4f9b", "Status": "OBSERVED", "Subject": "EvidenceRecord", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "EvidenceRecord defines Persisted evidence entity with graph identity and timestamps."}}, {"id": "evi_b897986577d1", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_30c766e442b3", "label": "\ud83e\udde0 MemoryInput\nMemoryInput defines Input payl...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_30c766e442b3", "Status": "OBSERVED", "Subject": "MemoryInput", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryInput defines Input payload for creating or proposing a new memory."}}, {"id": "evi_4d1c1b24b3e8", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_5904a945a47a", "label": "\ud83e\udde0 MemoryRecord\nMemoryRecord defines Complete ...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_5904a945a47a", "Status": "OBSERVED", "Subject": "MemoryRecord", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryRecord defines Complete versioned memory entity in the graph."}}, {"id": "evi_9ab06eeeca67", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_39dc6e32bad1", "label": "\ud83e\udde0 RepositoryInfo\nRepositoryInfo defines Metadat...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_39dc6e32bad1", "Status": "OBSERVED", "Subject": "RepositoryInfo", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "RepositoryInfo defines Metadata describing a registered codebase scope."}}, {"id": "evi_c11982d2eb25", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_285e694e8c6c", "label": "\ud83e\udde0 ScoredMemoryRecord\nScoredMemoryRecord defines Ret...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_285e694e8c6c", "Status": "OBSERVED", "Subject": "ScoredMemoryRecord", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "ScoredMemoryRecord defines Retrieved memory enriched with relevance and freshness scoring."}}, {"id": "evi_b9a8f0c5a735", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_ddfe75217a8b", "label": "\ud83e\udde0 MemoryRecallResponse\nMemoryRecallResponse defines S...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_ddfe75217a8b", "Status": "OBSERVED", "Subject": "MemoryRecallResponse", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryRecallResponse defines Structured response for memory recall queries."}}, {"id": "evi_c90fe7d30886", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_433334b2548b", "label": "\ud83e\udde0 MemoryExplanation\nMemoryExplanation defines Insp...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_433334b2548b", "Status": "OBSERVED", "Subject": "MemoryExplanation", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryExplanation defines Inspectable provenance and evidence breakdown for a claim."}}, {"id": "evi_10d7a33e675c", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_36a01896673c", "label": "\ud83e\udde0 MemoryHistoryResponse\nMemoryHistoryResponse defines ...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_36a01896673c", "Status": "OBSERVED", "Subject": "MemoryHistoryResponse", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "MemoryHistoryResponse defines Chronological revision chain for a logical fact."}}, {"id": "evi_c84de1031ea2", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_94613d2127d7", "label": "\ud83e\udde0 ChangeDetectionResponse\nChangeDetectionResponse define...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_94613d2127d7", "Status": "OBSERVED", "Subject": "ChangeDetectionResponse", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "ChangeDetectionResponse defines Summary of repository source changes and affected stale memories."}}, {"id": "evi_fdb55ebaa5b3", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_eef8309f5dec", "label": "\ud83e\udde0 CodeMemErrorDetail\nCodeMemErrorDetail defines Sta...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_eef8309f5dec", "Status": "OBSERVED", "Subject": "CodeMemErrorDetail", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "CodeMemErrorDetail defines Standardized error contract for CLI and MCP responses."}}, {"id": "evi_7299b72e4844", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_e90caee7d763", "label": "\ud83e\udde0 HandoffStatus\nHandoffStatus defines Lifecycl...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_e90caee7d763", "Status": "OBSERVED", "Subject": "HandoffStatus", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "HandoffStatus defines Lifecycle status of a cross-agent task handoff."}}, {"id": "evi_60a622007960", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_27f1204098ba", "label": "\ud83e\udde0 HandoffInput\nHandoffInput defines Structure...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_27f1204098ba", "Status": "OBSERVED", "Subject": "HandoffInput", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "HandoffInput defines Structured input for recording an agent-to-agent task handoff."}}, {"id": "evi_1ddb8bc293a0", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_8cc5c6935127", "label": "\ud83e\udde0 AgentHandoffRecord\nAgentHandoffRecord defines Dur...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_8cc5c6935127", "Status": "OBSERVED", "Subject": "AgentHandoffRecord", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "AgentHandoffRecord defines Durable record of a task handoff between coding agents (PRD Workflow H)."}}, {"id": "evi_4b5211104b30", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_9c97d5afbac0", "label": "\ud83e\udde0 ScanReport\nScanReport defines Summary of ...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_9c97d5afbac0", "Status": "OBSERVED", "Subject": "ScanReport", "Predicate": "defines", "Object": "src/codemem/core/models.py", "Confidence": "85%", "Full Claim": "ScanReport defines Summary of automatic repository scanning and knowledge graph bootstrapping."}}, {"id": "evi_938b5feda57c", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "2c696487bc5e..."}}, {"id": "mem_bfd4d225e1fa", "label": "\ud83e\udde0 MemoryService\nMemoryService defines Core mem...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_bfd4d225e1fa", "Status": "OBSERVED", "Subject": "MemoryService", "Predicate": "defines", "Object": "src/codemem/core/service.py", "Confidence": "85%", "Full Claim": "MemoryService defines Core memory engine managing validation, graph storage, evidence, and retrieval."}}, {"id": "evi_752c98fbfa9c", "label": "\ud83d\udcc4 service.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/core/service.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "8579434a9437..."}}, {"id": "mem_f0f46dbf8b1f", "label": "\ud83e\udde0 EvalCategory\nEvalCategory defines Core eval...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_f0f46dbf8b1f", "Status": "OBSERVED", "Subject": "EvalCategory", "Predicate": "defines", "Object": "src/codemem/evaluation/models.py", "Confidence": "85%", "Full Claim": "EvalCategory defines Core evaluation categories grounded in LongMemEval and RepoMem research."}}, {"id": "evi_6094575cda92", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/evaluation/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "38ede98f9419..."}}, {"id": "mem_77b6482c8def", "label": "\ud83e\udde0 TestCase\nTestCase defines A single exec...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_77b6482c8def", "Status": "OBSERVED", "Subject": "TestCase", "Predicate": "defines", "Object": "src/codemem/evaluation/models.py", "Confidence": "85%", "Full Claim": "TestCase defines A single executable evaluation scenario."}}, {"id": "evi_57752f1e7acf", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/evaluation/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "38ede98f9419..."}}, {"id": "mem_a14a7be3c6c9", "label": "\ud83e\udde0 CaseResult\nCaseResult defines Result of r...", "group": "memory_observed", "info": {"Type": "Memory [OBSERVED]", "Memory ID": "mem_a14a7be3c6c9", "Status": "OBSERVED", "Subject": "CaseResult", "Predicate": "defines", "Object": "src/codemem/evaluation/models.py", "Confidence": "85%", "Full Claim": "CaseResult defines Result of running a single evaluation test case."}}, {"id": "evi_6ae7b15e77cc", "label": "\ud83d\udcc4 models.py", "group": "evidence", "info": {"Type": "Code Anchor (Grounding Evidence)", "File Path": "src/codemem/evaluation/models.py", "Symbol Anchor": "Entire File", "SHA-256 Fingerprint": "38ede98f9419..."}}];
+    const rawEdges = [{"from": "handoff_e1f90b55d734", "to": "3447cb27b3a65c9a", "label": "ASSIGNED_IN", "arrows": "to"}, {"from": "handoff_a82fb6f707c1", "to": "3447cb27b3a65c9a", "label": "ASSIGNED_IN", "arrows": "to"}, {"from": "mem_71e028c54c45", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_71e028c54c45", "to": "evi_d081047af363", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_545462fcf2b1", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_545462fcf2b1", "to": "evi_48c176fa22b3", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_473f6b40f6cb", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_473f6b40f6cb", "to": "evi_2a715dc86aa6", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_473f6b40f6cb", "to": "evi_01740f608307", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_473f6b40f6cb", "to": "evi_6d2b4a957970", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_473f6b40f6cb", "to": "evi_6fa4e7797e92", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_473f6b40f6cb", "to": "evi_f69bf689f36c", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_73c8092ffbf6", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_73c8092ffbf6", "to": "evi_bd0cac1ba7d8", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_4e682266bbb7", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_4e682266bbb7", "to": "evi_95a8af36c775", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_87b56a4fc90d", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_87b56a4fc90d", "to": "evi_a56ea836ea8b", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_80c43ca57553", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_80c43ca57553", "to": "evi_72a2f996f85f", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_2c0c8d27a342", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_2c0c8d27a342", "to": "evi_817a665a61aa", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_50677de26e8f", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_50677de26e8f", "to": "evi_9a6d738fda08", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_3672b308ddbc", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_3672b308ddbc", "to": "evi_e7d6a10539d6", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_b5544c2b4f9b", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_b5544c2b4f9b", "to": "evi_b897986577d1", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_30c766e442b3", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_30c766e442b3", "to": "evi_4d1c1b24b3e8", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_5904a945a47a", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_5904a945a47a", "to": "evi_9ab06eeeca67", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_39dc6e32bad1", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_39dc6e32bad1", "to": "evi_c11982d2eb25", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_285e694e8c6c", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_285e694e8c6c", "to": "evi_b9a8f0c5a735", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_ddfe75217a8b", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_ddfe75217a8b", "to": "evi_c90fe7d30886", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_433334b2548b", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_433334b2548b", "to": "evi_10d7a33e675c", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_36a01896673c", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_36a01896673c", "to": "evi_c84de1031ea2", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_94613d2127d7", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_94613d2127d7", "to": "evi_fdb55ebaa5b3", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_eef8309f5dec", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_eef8309f5dec", "to": "evi_7299b72e4844", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_e90caee7d763", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_e90caee7d763", "to": "evi_60a622007960", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_27f1204098ba", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_27f1204098ba", "to": "evi_1ddb8bc293a0", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_8cc5c6935127", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_8cc5c6935127", "to": "evi_4b5211104b30", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_9c97d5afbac0", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_9c97d5afbac0", "to": "evi_938b5feda57c", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_bfd4d225e1fa", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_bfd4d225e1fa", "to": "evi_752c98fbfa9c", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_f0f46dbf8b1f", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_f0f46dbf8b1f", "to": "evi_6094575cda92", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_77b6482c8def", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_77b6482c8def", "to": "evi_57752f1e7acf", "label": "GROUNDED_IN", "arrows": "to"}, {"from": "mem_a14a7be3c6c9", "to": "3447cb27b3a65c9a", "label": "SCOPED_TO", "arrows": "to"}, {"from": "mem_a14a7be3c6c9", "to": "evi_6ae7b15e77cc", "label": "GROUNDED_IN", "arrows": "to"}];
+
+    const nodeLookup = {};
+    rawNodes.forEach(n => { nodeLookup[n.id] = n; });
+
+    const nodes = new vis.DataSet(rawNodes);
+    const edges = new vis.DataSet(rawEdges);
+    const container = document.getElementById('network');
+
+    const options = {
+      nodes: {
+        shape: 'box',
+        margin: { top: 10, bottom: 10, left: 14, right: 14 },
+        borderWidth: 1.5,
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.6)', size: 10, x: 0, y: 5 },
+        font: {
+          color: '#ffffff',
+          size: 13,
+          face: 'Plus Jakarta Sans, -apple-system, sans-serif',
+          multi: true,
+          bold: { color: '#ffffff', size: 13 }
+        }
+      },
+      groups: {
+        repository: {
+          shape: 'box',
+          color: { background: '#0284c7', border: '#38bdf8', highlight: { background: '#0369a1', border: '#7dd3fc' } },
+          font: { size: 14, bold: true }
+        },
+        memory_observed: {
+          shape: 'box',
+          color: { background: '#15803d', border: '#4ade80', highlight: { background: '#166534', border: '#86efac' } }
+        },
+        memory_inferred: {
+          shape: 'box',
+          color: { background: '#7e22ce', border: '#c084fc', highlight: { background: '#6b21a8', border: '#d8b4fe' } }
+        },
+        memory_verified: {
+          shape: 'box',
+          color: { background: '#16a34a', border: '#86efac', highlight: { background: '#15803d', border: '#bbf7d0' } }
+        },
+        memory_stale: {
+          shape: 'box',
+          color: { background: '#b91c1c', border: '#f87171', highlight: { background: '#991b1b', border: '#fca5a5' } }
+        },
+        evidence: {
+          shape: 'box',
+          color: { background: '#854d0e', border: '#facc15', highlight: { background: '#713f12', border: '#fde047' } },
+          font: { size: 11, color: '#fef08a' }
+        },
+        handoff: {
+          shape: 'box',
+          color: { background: '#c2410c', border: '#fb923c', highlight: { background: '#9a3412', border: '#fdba74' } },
+          font: { size: 12, bold: true }
+        }
+      },
+      edges: {
+        color: { color: 'rgba(148, 163, 184, 0.55)', highlight: '#38bdf8', hover: '#60a5fa' },
+        font: {
+          color: '#000000',
+          size: 11,
+          face: 'Fira Code, monospace',
+          align: 'middle',
+          background: '#f8fafc',
+          strokeWidth: 0,
+          bold: true
+        },
+        width: 1.8,
+        smooth: { type: 'cubicBezier', forceDirection: 'none', roundness: 0.3 }
+      },
+      physics: {
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: {
+          gravitationalConstant: -80,
+          centralGravity: 0.008,
+          springLength: 140,
+          springConstant: 0.12,
+          damping: 0.9,
+          avoidOverlap: 0.85
+        },
+        stabilization: { iterations: 200 }
+      },
+      interaction: {
+        hover: true,
+        zoomView: true,
+        dragView: true
+      }
+    };
+
+    const network = new vis.Network(container, { nodes, edges }, options);
+
+    // Click handler for modern Inspector Drawer
+    network.on("click", function(params) {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+        const nodeData = nodeLookup[nodeId];
+        if (nodeData && nodeData.info) {
+          openDrawer(nodeData);
+        }
+      } else {
+        closeDrawer();
+      }
+    });
+
+    function openDrawer(nodeData) {
+      const drawer = document.getElementById("drawer");
+      const badge = document.getElementById("drawer-badge");
+      const content = document.getElementById("drawer-content");
+
+      badge.innerText = nodeData.info["Type"] || "NODE";
+      badge.style.background = nodeData.group.includes("handoff") ? "#ea580c" : (nodeData.group.includes("repo") ? "#0284c7" : "#16a34a");
+      badge.style.color = "white";
+
+      let html = "";
+      for (const [key, val] of Object.entries(nodeData.info)) {
+        if (key === "Type") continue;
+        const isCode = key.includes("ID") || key.includes("Fingerprint") || key.includes("HEAD") || key.includes("Path");
+        html += `
+          <div class="prop-row">
+            <div class="prop-label">${key}</div>
+            <div class="prop-val ${isCode ? 'code' : ''}">${val}</div>
+          </div>
+        `;
+      }
+      content.innerHTML = html;
+      drawer.classList.add("active");
+    }
+
+    function closeDrawer() {
+      document.getElementById("drawer").classList.remove("active");
+    }
+  </script>
+</body>
+</html>
