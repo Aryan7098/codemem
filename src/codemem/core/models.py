@@ -281,3 +281,16 @@ class AgentHandoffRecord(BaseModel):
         """Alias for id ensuring backwards and forwards compatibility."""
         return self.id
 
+
+class ScanReport(BaseModel):
+    """Summary of automatic repository scanning and knowledge graph bootstrapping."""
+
+    repository_id: str
+    root_path: str
+    files_scanned: int
+    memories_created: int
+    dependencies_found: List[str] = Field(default_factory=list)
+    symbols_indexed: List[str] = Field(default_factory=list)
+    summary: str
+
+

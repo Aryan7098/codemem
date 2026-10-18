@@ -391,6 +391,35 @@ This document details how execution travels across files, functions, and modules
    - Deterministic deduplication when multiple agents remember identical claims concurrently.
 ```
 
+---
+
+### Flow N: Codebase Scanning & Knowledge Graph Bootstrapping (`codemem scan`)
+```
+1. Invocation:
+   CLI: cli/main.py :: scan_cmd(path, backend, max_files, as_json)
+   MCP: mcp/server.py :: scan_repository(path, max_files)
+
+2. Core Domain Execution (repository/scanner.py :: CodebaseScanner):
+   - Manifest Parsing:
+     - Discovers pyproject.toml, requirements.txt, package.json
+     - Extracts project metadata and dependencies
+     - Emits MemoryType.DEPENDENCY and project architecture facts
+   - Test Suite Discovery:
+     - Detects tests/ directory and test runners
+     - Emits MemoryType.CONVENTION memories
+   - AST Code Inspection:
+     - Walks source directories (ignoring .git, .venv, node_modules)
+     - Parses Python AST to discover top-level classes and functions
+     - Extracts docstrings, line numbers, and file paths
+     - Emits MemoryType.ARCHITECTURE facts with EvidenceKind.FILE_SYMBOL anchors
+
+3. Storage & Result:
+   - Commits all generated memories into active backend (FalkorDB / InMemory)
+   - Emits structured ScanReport with files_scanned, memories_created, dependencies_found, and symbols_indexed
+   - Bootstrapped graph is immediately queryable via recall() and MCP
+```
+
+
 
 
 

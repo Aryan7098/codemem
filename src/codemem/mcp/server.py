@@ -70,6 +70,7 @@ class CodeMemMCPServer:
         self.mcp.tool(name="record_handoff")(self.record_handoff)
         self.mcp.tool(name="list_handoffs")(self.list_handoffs)
         self.mcp.tool(name="complete_handoff")(self.complete_handoff)
+        self.mcp.tool(name="scan_repository")(self.scan_repository)
 
     def _register_resources(self) -> None:
         """Bind MCP resources for automatic context window injection."""
@@ -504,6 +505,24 @@ class CodeMemMCPServer:
                 error_code="HANDOFF_NOT_FOUND",
                 message=str(exc),
                 details={"handoff_id": handoff_id},
+            ).model_dump(mode="json")
+
+    def scan_repository(
+        self,
+        path: Optional[str] = None,
+        max_files: int = 150,
+    ) -> Dict[str, Any]:
+        """Scan a repository, extract manifests and AST symbols, and bootstrap initial knowledge graph."""
+        try:
+            target_path = path or self.repo_path
+            report = self.service.scan_repository(path=target_path, max_files=max_files)
+            self._flush_store()
+            return report.model_dump(mode="json")
+        except Exception as exc:
+            return CodeMemErrorDetail(
+                error_code="SCAN_FAILED",
+                message=str(exc),
+                details={"path": path or self.repo_path},
             ).model_dump(mode="json")
 
     def run(self) -> None:

@@ -460,6 +460,24 @@ This document tracks all meaningful architectural, technical, and implementation
   4. Augment `MemoryService.recall()` with Stage 1C (Semantic Vector Search) alongside Stage 1A (Lexical) and Stage 1B (2-hop Concept Graph), fusing lexical and vector similarities into a hybrid `match_score`.
 - **Tradeoffs & Consequences:** Provides robust zero-overlap semantic recall, keeps test runs 100% deterministic and offline, and aligns directly with FalkorDB native vector indexing.
 
+---
+
+### ADR-030: Automated Codebase Scanning & Knowledge Graph Bootstrapping (`scan`)
+- **Date:** 2026-10-18
+- **Status:** Accepted
+- **Context:** When CodeMem is initialized in a new or foreign repository, the knowledge graph starts empty until agents manually invoke `remember`. To provide immediate zero-touch value to developers and agents, CodeMem requires an automatic bootstrap scanner that discovers manifests, dependencies, test conventions, and top-level architectural symbols, seeding a starter knowledge graph.
+- **Decision:**
+  1. **Scanner Implementation (`src/codemem/repository/scanner.py`):**
+     - Manifest Inspection: Parses `pyproject.toml` (using built-in `tomllib` or regex), `requirements.txt`, and `package.json`, emitting `MemoryType.DEPENDENCY` and project metadata facts.
+     - Test Suite Detection: Discovers `tests/` directories, test runner conventions (`pytest`, `jest`), and registers `MemoryType.CONVENTION` memories.
+     - AST Symbol Extraction: Parses Python source files using standard library `ast`, identifying prominent classes and functions with exact file line numbers and docstrings, emitting anchored `MemoryType.ARCHITECTURE` memories.
+  2. **Domain & Transports:**
+     - `MemoryService.scan_repository(path, max_files)`: Orchestrates scanning, repository registration, and atomic memory creation.
+     - CLI: Exposes `codemem scan [--path .] [--backend memory|falkordb] [--max-files 150] [--json]`.
+     - MCP: Exposes `@mcp.tool(name="scan_repository")` allowing AI agents to auto-bootstrap memory for arbitrary codebases.
+- **Tradeoffs & Consequences:** Allows judges, developers, and agents to attach CodeMem to any repository and immediately run `recall` on existing code structure with zero manual data entry.
+
+
 
 
 

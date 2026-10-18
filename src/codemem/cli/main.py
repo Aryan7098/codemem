@@ -209,6 +209,42 @@ def init_cmd(path: str, as_json: bool, backend: Optional[str] = None) -> None:
         _emit_error(code, str(exc), as_json=as_json)
 
 
+@cli.command("scan")
+@click.option("--path", "--repo", "path", default=".", help="Path to repository root.")
+@click.option(
+    "--backend",
+    type=click.Choice(["memory", "falkordb"], case_sensitive=False),
+    default=None,
+    help="Storage backend ('memory' or 'falkordb').",
+)
+@click.option("--max-files", default=150, help="Maximum number of files to inspect.")
+@click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
+def scan_cmd(path: str, as_json: bool, backend: Optional[str] = None, max_files: int = 150) -> None:
+    """Scan a repository, extract manifests and AST symbols, and bootstrap initial knowledge graph."""
+    try:
+        service, repo, state_file = get_service_and_repo(path, backend=backend)
+        report = service.scan_repository(path=path, max_files=max_files)
+        if isinstance(service.store, InMemoryGraphStore) and state_file:
+            save_persistent_store(service.store, state_file)
+
+        if as_json:
+            click.echo(report.model_dump_json(indent=2))
+        else:
+            click.secho(f"Codebase Scan Complete: {report.repository_id}", fg="green", bold=True)
+            click.echo(f"  Root Path       : {report.root_path}")
+            click.echo(f"  Files Scanned   : {report.files_scanned}")
+            click.echo(f"  Memories Created: {report.memories_created}")
+            if report.dependencies_found:
+                click.echo(f"  Dependencies    : {', '.join(report.dependencies_found[:10])}")
+            if report.symbols_indexed:
+                click.echo(f"  Symbols Indexed : {', '.join(report.symbols_indexed[:10])}")
+            click.secho(f"\n[+] {report.summary}", fg="cyan")
+    except Exception as exc:
+        code = "DATABASE_UNAVAILABLE" if ("DATABASE_UNAVAILABLE" in str(exc) or "Failed to connect to FalkorDB" in str(exc)) else "SCAN_FAILED"
+        _emit_error(code, str(exc), as_json=as_json)
+
+
+
 @cli.command("remember")
 @click.argument("claim")
 @click.option(

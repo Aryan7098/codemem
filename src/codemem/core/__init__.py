@@ -17,6 +17,7 @@ from codemem.core.models import (
     MemoryStatus,
     MemoryType,
     RepositoryInfo,
+    ScanReport,
     ScoredMemoryRecord,
 )
 
@@ -40,5 +41,6 @@ __all__ = [
     "MemoryStatus",
     "MemoryType",
     "RepositoryInfo",
+    "ScanReport",
     "ScoredMemoryRecord",
 ]

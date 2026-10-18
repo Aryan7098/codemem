@@ -22,6 +22,7 @@ from codemem.core.models import (
     MemoryRecord,
     MemoryStatus,
     RepositoryInfo,
+    ScanReport,
     ScoredMemoryRecord,
 )
 from codemem.graph.in_memory import InMemoryGraphStore
@@ -618,4 +619,11 @@ class MemoryService:
         record.updated_at = datetime.now(timezone.utc).isoformat()
         self.store.save_handoff(record)
         return record
+
+    def scan_repository(self, path: str = ".", max_files: int = 150) -> ScanReport:
+        """Scan codebase at path, extract manifests and AST symbols, and bootstrap knowledge graph."""
+        from codemem.repository.scanner import CodebaseScanner
+        scanner = CodebaseScanner(service=self)
+        return scanner.scan(repo_path=path, max_files=max_files)
+
 
