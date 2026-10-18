@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "codemem": {
+      "command": "python",
+      "args": [
+        "-m",
+        "codemem.cli.main",
+        "mcp"
+      ],
+      "env": {
+        "CODEMEM_BACKEND": "memory",
+        "CODEMEM_STORE_PATH": ".codemem/store.json"
+      }
+    }
+  }
+}
