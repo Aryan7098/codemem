@@ -448,15 +448,17 @@ def generate_interactive_graph(repo_path: Path = Path(".")):
         }}
       }},
       edges: {{
-        color: {{ color: 'rgba(148, 163, 184, 0.4)', highlight: '#38bdf8', hover: '#60a5fa' }},
+        color: {{ color: 'rgba(148, 163, 184, 0.55)', highlight: '#38bdf8', hover: '#60a5fa' }},
         font: {{
-          color: '#94a3b8',
-          size: 10,
+          color: '#000000',
+          size: 11,
           face: 'Fira Code, monospace',
           align: 'middle',
-          background: 'rgba(13, 21, 39, 0.8)'
+          background: '#f8fafc',
+          strokeWidth: 0,
+          bold: true
         }},
-        width: 1.5,
+        width: 1.8,
         smooth: {{ type: 'cubicBezier', forceDirection: 'none', roundness: 0.3 }}
       }},
       physics: {{
