@@ -71,6 +71,7 @@ class CodeMemMCPServer:
         self.mcp.tool(name="list_handoffs")(self.list_handoffs)
         self.mcp.tool(name="complete_handoff")(self.complete_handoff)
         self.mcp.tool(name="scan_repository")(self.scan_repository)
+        self.mcp.tool(name="visualize_graph")(self.visualize_graph)
 
     def _register_resources(self) -> None:
         """Bind MCP resources for automatic context window injection."""
@@ -521,6 +522,51 @@ class CodeMemMCPServer:
         except Exception as exc:
             return CodeMemErrorDetail(
                 error_code="SCAN_FAILED",
+                message=str(exc),
+                details={"path": path or self.repo_path},
+            ).model_dump(mode="json")
+
+    def visualize_graph(
+        self,
+        path: Optional[str] = None,
+        open_browser: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Tool 13: visualize_graph
+        Generates an interactive HTML graph visualization of the repository memory graph.
+        Returns the absolute path to the generated HTML viewer and node/edge statistics.
+        """
+        try:
+            import json
+            from pathlib import Path
+            from scripts.visualize_graph import generate_interactive_graph
+
+            target_dir = Path(path).resolve() if path else Path(self.repo_path).resolve()
+            generate_interactive_graph(target_dir)
+            out_file = target_dir / "graph_viewer.html"
+
+            store_file = target_dir / ".codemem" / "store.json"
+            node_count = 0
+            edge_count = 0
+            if store_file.exists():
+                store_data = json.loads(store_file.read_text(encoding="utf-8"))
+                node_count = len(store_data.get("memories", [])) + len(store_data.get("handoffs", [])) + len(store_data.get("repositories", []))
+                edge_count = len(store_data.get("memories", [])) * 2
+
+            if open_browser and out_file.exists():
+                import webbrowser
+                webbrowser.open(out_file.as_uri())
+
+            return {
+                "status": "SUCCESS",
+                "html_path": str(out_file),
+                "nodes": node_count,
+                "edges": edge_count,
+                "browser_opened": open_browser,
+            }
+        except Exception as exc:
+            return CodeMemErrorDetail(
+                error_code="VISUALIZATION_FAILED",
                 message=str(exc),
                 details={"path": path or self.repo_path},
             ).model_dump(mode="json")
