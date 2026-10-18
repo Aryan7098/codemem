@@ -167,95 +167,108 @@ cd codemem
 # Create and activate virtual environment
 python -m venv .venv
 # On Windows:
+## 5. Setup & Installation
+
+CodeMem can be run in two execution modes:
+1. **In-Memory Store (Zero-Dependency):** Backed by an atomic local JSON persistence file (`.codemem/store.json`). Requires zero external databases and runs instantly.
+2. **FalkorDB Graph Engine (Authoritative):** Runs on official FalkorDB executing native openCypher queries over Redis graph protocol.
+
+---
+
+### Step 1: Install CodeMem in CLI
+
+Clone the repository and install it in editable mode inside a Python virtual environment:
+
+```bash
+# Clone the repository
+git clone https://github.com/Aryan7098/codemem.git
+cd codemem
+
+# Create and activate virtual environment
+python -m venv .venv
+
+# On Windows:
 .venv\Scripts\activate
 # On Linux/macOS:
 source .venv/bin/activate
 
-# Install dependencies in editable mode
+# Install CodeMem and dependencies
 pip install -e ".[dev]"
-```
 
-### Step 2: Launch FalkorDB (Docker)
-```bash
-# Run official FalkorDB image
-docker run -p 6379:6379 -it --rm falkordb/falkordb:latest
-```
-*(CodeMem also includes a built-in, thread-safe zero-dependency in-memory graph store for instant offline evaluation).*
-
----
-
-## 6. CLI Usage & Workflows
-
-### Initialize Repository Scope
-```bash
-codemem init
-```
-
-### Store an Evidence-Backed Memory (`remember`)
-```bash
-codemem remember "Auth tokens use RS256 with 15-minute expiration" \
-  --evidence "src/auth/validator.py:verify_token:10-25" \
-  --test-cmd "pytest tests/test_auth.py" \
-  --test-passed \
-  --type architecture \
-  --tag auth --tag security
-```
-
-### Recall Context (`recall`)
-```bash
-codemem recall "How does authentication token validation work?"
-```
-*If evidence is missing or confidence is below threshold, CodeMem conservatively abstains rather than hallucinating.*
-
-### Check Codebase Freshness (`check-changes`)
-```bash
-codemem check-changes
-```
-*Inspects Git commit delta and file SHA-256 hashes; flags memories as `STALE` if referenced files or AST symbols changed.*
-
-### Explicit Revalidation (`revalidate`)
-```bash
-codemem revalidate <memory_id> --test-cmd "pytest tests/test_auth.py" --test-passed
-```
-
-### Multi-Agent Handoffs (`handoff`)
-```bash
-# Record handoff from Architect to Coder
-codemem handoff record \
-  --from "architect-agent" \
-  --to "coder-agent" \
-  --objective "Implement refresh token rotation" \
-  --completed "Designed schema and verified token validation" \
-  --risk "Concurrency race condition on simultaneous refresh calls"
-
-# List pending handoffs
-codemem handoff list --status PENDING
-
-# Complete handoff
-codemem handoff complete <handoff_id> --agent "coder-agent"
+# Verify CLI installation
+codemem --help
 ```
 
 ---
 
-## 7. Model Context Protocol (MCP) Integration
+### Step 2: Storage Backend Setup
 
-CodeMem exposes a standard **Model Context Protocol (MCP)** server over `stdio` using FastMCP. Any MCP-compatible agent (Google Antigravity IDE, Claude Desktop, Cursor) can consume CodeMem.
+#### Option A: Running with In-Memory Store (Default)
+No setup required. By default, CodeMem uses its thread-safe `InMemoryGraphStore` with automatic state persistence to `.codemem/store.json`.
 
-### Available MCP Tools:
-- `register_repository(path)`
-- `remember(repository_id, claim, evidence, memory_type, confidence_score)`
-- `recall(repository_id, query, top_k)`
-- `update(memory_id, new_claim, reason, repository_id)`
-- `history(logical_fact_id, repository_id)`
-- `explain(memory_id, repository_id)`
-- `check_changes(repository_id)`
-- `revalidate_memory(memory_id, repo_id, test_command, test_passed)`
-- `record_handoff(repository_id, originating_agent_id, task_objective, completed_work, open_risks)`
-- `list_handoffs(repo_id, status)`
-- `complete_handoff(handoff_id, repo_id, receiving_agent_id)`
+#### Option B: Running with Live FalkorDB (Docker)
+To connect CodeMem to a real FalkorDB graph database:
 
-### Google Antigravity IDE Setup
-Add to your project's `.agents/mcp_config.json`:
+```bash
+# 1. Start FalkorDB container via Docker Compose
+docker compose up -d
+
+# Or via direct Docker run:
+docker run -d --name codemem-falkordb -p 6379:6379 falkordb/falkordb:latest
+
+# 2. Tell CodeMem to use the FalkorDB backend:
+# Via CLI flag:
+codemem --backend falkordb init
+
+# Or via environment variable:
+export CODEMEM_BACKEND=falkordb
+export FALKORDB_HOST=localhost
+export FALKORDB_PORT=6379
+```
+
+---
+
+### Step 3: Setup CodeMem as an MCP Server
+
+CodeMem exposes a standard **Model Context Protocol (MCP)** server over `stdio` using FastMCP. Any MCP client can run it directly:
+
+#### 1. Google Antigravity IDE Setup
+Add the server configuration to your workspace `.agents/mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "codemem": {
+      "command": "python",
+      "args": ["-m", "codemem.cli.main", "mcp"],
+      "env": {
+        "CODEMEM_BACKEND": "memory",
+        "CODEMEM_STORE_PATH": ".codemem/store.json"
+      }
+    }
+  }
+}
+```
+*(When using live FalkorDB, change `"CODEMEM_BACKEND": "falkordb"`).*
+
+#### 2. Claude Desktop Setup
+Add to `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "codemem": {
+      "command": "python",
+      "args": ["-m", "codemem.cli.main", "mcp"],
+      "cwd": "/path/to/your/project",
+      "env": {
+        "CODEMEM_BACKEND": "memory"
+      }
+    }
+  }
+}
+```
+
+#### 3. Cursor Setup
+Add to `.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -267,21 +280,117 @@ Add to your project's `.agents/mcp_config.json`:
 }
 ```
 
-### Claude Desktop Setup
-Add to `claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "codemem": {
-      "command": "python",
-      "args": ["-m", "codemem.cli.main", "mcp"],
-      "cwd": "/path/to/your/project"
-    }
-  }
-}
+---
+
+## 6. CLI Command Reference
+
+Below is the complete reference of all 14 CLI commands provided by `codemem`:
+
+| Command | Syntax | Description |
+|---------|--------|-------------|
+| `init` | `codemem init [--path .] [--backend memory\|falkordb]` | Registers and initializes the repository scope in the graph store. |
+| `scan` | `codemem scan [--path .] [--max-files 150]` | Automatically inspects manifests (`pyproject.toml`, `package.json`), test suites, and AST classes to bootstrap a starter knowledge graph. |
+| `remember` | `codemem remember "<claim>" --evidence "<path:symbol>" [--test-cmd "<cmd>"] [--test-passed] [--type <type>]` | Records a new architectural or design belief, anchors it to concrete code evidence, and sets status (`VERIFIED`, `OBSERVED`, `INFERRED`). |
+| `recall` | `codemem recall "<query>" [--top-k 5]` | Queries the memory graph using hybrid retrieval (lexical + 2-hop concept graph + vector). Conservatively abstains if confidence < 0.45. |
+| `update` | `codemem update <id> "<new_claim>" --reason "<reason>"` | Supersedes an existing memory with a new version, linking `(:Memory)-[:SUPERSEDES]->(:Memory)` without deleting audit history. |
+| `history` | `codemem history <fact_id>` | Traverses the full chronological lineage of a logical fact across all revisions. |
+| `explain` | `codemem explain <id>` | Inspects the grounding evidence records, file hashes, and AST anchors for a specific memory. |
+| `check-changes` | `codemem check-changes` | Inspects Git commit delta and file SHA-256 hashes. Flags memories as `STALE` if referenced source files or AST symbols changed. |
+| `revalidate` | `codemem revalidate <id> [--test-cmd "<cmd>"] [--test-passed]` | Re-verifies a `STALE` memory against current codebase anchors; upgrades to `VERIFIED` on passing tests. |
+| `status` | `codemem status` | Prints repository identity, git status, active vs superseded counts, and status breakdown. |
+| `handoff record` | `codemem handoff record --from <agent> --to <agent> --objective "<obj>" --completed "<work>" [--risk "<risk>"]` | Records a structured task transition between agents with completed work, open risks, and linked memories. |
+| `handoff list` | `codemem handoff list [--status PENDING\|IN_PROGRESS\|COMPLETED]` | Lists and filters agent handoff records for the repository. |
+| `handoff complete` | `codemem handoff complete <handoff_id> [--agent <agent>]` | Marks an agent handoff as `COMPLETED`. |
+| `eval` | `codemem eval [--json] [--output <file>]` | Executes the reproducible 10-scenario LongMemEval evaluation benchmark suite. |
+| `mcp` | `codemem mcp [--backend memory\|falkordb]` | Launches the FastMCP stdio server for LLM coding agents. |
+
+---
+
+### CLI Command Examples
+
+```bash
+# 1. Initialize repository and auto-scan codebase
+codemem init
+codemem scan
+
+# 2. Store an evidence-backed claim
+codemem remember "Auth uses RS256 JWT tokens with 15-minute expiration" \
+  --evidence "src/auth/validator.py:TokenValidator:10-25" \
+  --test-cmd "pytest tests/test_auth.py" \
+  --test-passed \
+  --type architecture \
+  --tag auth --tag security
+
+# 3. Recall context
+codemem recall "How does authentication work?"
+
+# 4. Check for code drift & staleness
+codemem check-changes
+
+# 5. Revalidate a memory after running tests
+codemem revalidate mem_545462fcf2b1 --test-cmd "pytest tests/test_auth.py" --test-passed
+
+# 6. Record a multi-agent handoff
+codemem handoff record \
+  --from "architect-agent" \
+  --to "coder-agent" \
+  --objective "Add refresh token rotation" \
+  --completed "Verified TokenValidator schema" \
+  --risk "Concurrency race condition on simultaneous refresh calls"
+
+# 7. Complete handoff
+codemem handoff complete handoff_e8306f433c4e --agent "coder-agent"
+
+# 8. Run benchmark evaluation
+codemem eval
 ```
 
 ---
+
+## 7. Model Context Protocol (MCP) Server Reference
+
+CodeMem implements the complete **Model Context Protocol (MCP)** specification via FastMCP, providing **Tools**, **Resources**, and **Prompts**.
+
+### 7.1 MCP Tools (Callable by LLM Agents)
+
+| Tool Name | Parameters | What It Does |
+|-----------|------------|--------------|
+| `register_repository` | `path` | Resolves 3-tier repository identity and registers scope in FalkorDB. |
+| `scan_repository` | `path, max_files` | Automatically inspects codebase manifests, test suites, and AST classes to bootstrap a knowledge graph. |
+| `remember` | `repository_id, claim, evidence, memory_type, confidence_score, tags, source_agent_id` | Anchors a new belief to code evidence in the graph with verified status. |
+| `recall` | `repository_id, query, top_k` | Retrieves high-confidence memories via hybrid graph traversal with conservative abstention. |
+| `update` | `memory_id, new_claim, reason, repository_id` | Non-destructively supersedes a memory version with an audit edge. |
+| `history` | `logical_fact_id, repository_id` | Returns the full historical revision chain of a logical fact. |
+| `explain` | `memory_id, repository_id` | Returns evidence records, symbol anchors, and test results for a memory. |
+| `check_changes` | `repository_id` | Traverses `:SUPPORTED_BY` edges and flags memories affected by code edits as `STALE`. |
+| `revalidate_memory` | `memory_id, repo_id, test_command, test_passed` | Re-verifies AST symbols and test results, restoring status to `VERIFIED` or `OBSERVED`. |
+| `record_handoff` | `repository_id, originating_agent_id, receiving_agent_id, task_objective, completed_work, open_risks, relevant_memory_ids` | Creates a first-class handoff record linking open risks to memory nodes. |
+| `list_handoffs` | `repo_id, status` | Queries pending or active task handoffs. |
+| `complete_handoff` | `handoff_id, repo_id, receiving_agent_id` | Marks a task handoff as completed by the receiving agent. |
+
+---
+
+### 7.2 MCP Resources (Passive Context Injection)
+
+FastMCP resources allow LLMs (Claude Desktop, Cursor) to directly read graph state into their context window without making tool calls:
+
+| Resource URI | Description |
+|--------------|-------------|
+| `codemem://repo/{repo_id}/status` | Live repository health summary, active vs stale counts, and status breakdown. |
+| `codemem://repo/{repo_id}/memories` | Full JSON export of active memories and their evidence anchors in the repository. |
+| `codemem://repo/{repo_id}/handoffs` | List of all open, in-progress, and completed agent handoffs. |
+
+---
+
+### 7.3 MCP Prompts (Workflow Priming Templates)
+
+Standardized prompt templates that guide LLM agents on how to interact with CodeMem:
+
+| Prompt Name | Arguments | Description |
+|-------------|-----------|-------------|
+| `session_startup_recall` | `repo_id, focus_topic` | Primes the agent at the start of a coding session by querying CodeMem for existing architectural decisions and known traps. |
+| `agent_handoff_briefing` | `repo_id, handoff_id` | Injects prior agent's completed work, open risks, and linked memories before starting a new subtask. |
+
 
 ## 8. Reproducible Evaluation Benchmark (`codemem eval`)
 
